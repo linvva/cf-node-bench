@@ -1,0 +1,12 @@
+{
+  "name": "cf-node-bench",
+  "private": true,
+  "packageManager": "pnpm@11.15.1",
+  "scripts": {
+    "dev": "pnpm --dir frontend dev",
+    "build": "pnpm --dir frontend build",
+    "test": "pnpm --dir frontend test",
+    "test:e2e": "pnpm --dir frontend test:e2e",
+    "typecheck": "pnpm --dir frontend typecheck"
+  }
+}

@@ -1,0 +1,12 @@
+/build/bin/
+/.serena/
+/node_modules/
+/frontend/dist/*
+!/frontend/dist/.gitkeep
+/frontend/node_modules/
+/frontend/playwright-report/
+/frontend/test-results/
+/frontend/wailsjs/
+/coverage/
+*.log
+.DS_Store

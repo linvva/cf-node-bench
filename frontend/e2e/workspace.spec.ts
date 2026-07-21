@@ -1,0 +1,75 @@
+import { expect, test } from "@playwright/test";
+
+test("workspace remains stable through a complete run",async({page},testInfo)=>{
+  await page.goto("/");
+  await expect(page.getByRole("heading",{name:"测速工作台"})).toBeVisible();
+  const stage=page.getByLabel("测速阶段");
+  const before=await stage.boundingBox();
+  await page.getByRole("button",{name:/开始测速/}).click();
+  await expect(page.getByRole("button",{name:/取消测速/})).toBeVisible();
+  const during=await stage.boundingBox();
+  expect(during?.height).toBe(before?.height);
+  await expect(page.getByText("104.18.1.20:8443")).toBeVisible({timeout:8000});
+  await page.getByText("104.18.1.20:8443").click();
+  await expect(page.locator('[data-slot="drawer-content"]')).toBeVisible();
+  await page.waitForTimeout(350);
+  expect(await page.locator(".drawer__dialog").evaluate(element=>element.getBoundingClientRect().width)).toBeGreaterThan(350);
+  await page.screenshot({path:testInfo.outputPath("drawer.png"),fullPage:true});
+  await page.getByRole("button",{name:"关闭"}).click();
+  await expect(page.locator('[data-slot="drawer-content"]')).not.toBeVisible();
+  await page.screenshot({path:testInfo.outputPath("workspace.png"),fullPage:true});
+  const overflow=await page.evaluate(()=>({x:document.documentElement.scrollWidth-document.documentElement.clientWidth,y:document.documentElement.scrollHeight-document.documentElement.clientHeight}));
+  expect(overflow.x).toBe(0); expect(overflow.y).toBe(0);
+});
+
+test("settings and sources fit without overlap",async({page},testInfo)=>{
+  await page.goto("/");
+  await page.getByRole("button",{name:"设置"}).click();
+  await expect(page.getByRole("heading",{name:"测速设置"})).toBeVisible();
+  await page.getByLabel("允许国家选择器").click();
+  await page.getByRole("searchbox",{name:"搜索允许国家"}).fill("中国");
+  await page.getByRole("option",{name:/中国.*CN/}).click();
+  await expect(page.getByLabel("允许国家已选")).toContainText("CN");
+  const countryFlag=page.getByLabel("允许国家已选").locator(".country-flag").first();
+  await expect(countryFlag).toBeVisible();
+  expect(await countryFlag.evaluate(element=>getComputedStyle(element).fontFamily)).toContain("Twemoji Mozilla");
+  expect(await page.evaluate(()=>document.fonts.check('16px "Twemoji Mozilla"',"🇨🇳"))).toBe(true);
+  await expect(page.getByRole("searchbox",{name:"搜索允许国家"})).not.toBeVisible();
+  await page.getByLabel("排除国家选择器").click();
+  await page.getByRole("searchbox",{name:"搜索排除国家"}).fill("CN");
+  await page.getByRole("option",{name:/中国.*CN/}).click();
+  await expect(page.getByRole("searchbox",{name:"搜索排除国家"})).not.toBeVisible();
+  await page.screenshot({path:testInfo.outputPath("settings.png"),fullPage:true});
+  const settingsClipped=await page.locator("button, input").evaluateAll(nodes=>nodes.filter(node=>node.scrollWidth>node.clientWidth+1||node.scrollHeight>node.clientHeight+1).length);
+  expect(settingsClipped).toBe(0);
+  await page.locator(".main-content").evaluate(element=>{element.scrollTop=element.scrollHeight;});
+  await expect(page.getByRole("button",{name:/保存设置/})).toBeVisible();
+  await page.getByRole("button",{name:/保存设置/}).click();
+  const countryError=page.locator(".settings-footer .settings-error");
+  await expect(countryError).toHaveText("国家 CN 不能同时出现在允许和排除列表");
+  await page.locator(".main-content").evaluate(element=>{element.scrollTop=element.scrollHeight;});
+  await expect(countryError).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath("settings-bottom.png"),fullPage:true});
+  await page.getByRole("button",{name:"数据源"}).click();
+  await expect(page.getByRole("heading",{name:"数据源管理"})).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath("sources.png"),fullPage:true});
+  const clipped=await page.locator("button, input").evaluateAll(nodes=>nodes.filter(node=>node.scrollWidth>node.clientWidth+1||node.scrollHeight>node.clientHeight+1).length);
+  expect(clipped).toBe(0);
+});
+
+test("blocked countries change filter totals and results",async({page})=>{
+  await page.goto("/");
+  await page.getByRole("button",{name:"设置"}).click();
+  await page.getByLabel("排除国家选择器").click();
+  await page.getByRole("searchbox",{name:"搜索排除国家"}).fill("CN");
+  await page.getByRole("option",{name:/中国.*CN/}).click();
+  await page.locator(".main-content").evaluate(element=>{element.scrollTop=element.scrollHeight;});
+  await page.getByRole("button",{name:/保存设置/}).click();
+  await page.getByRole("button",{name:"测速工作台"}).click();
+  await page.getByRole("button",{name:/开始测速/}).click();
+  const filterStage=page.locator(".stage").filter({hasText:"解析 / 过滤"});
+  await expect(filterStage).toHaveAttribute("data-state","completed",{timeout:8000});
+  expect(await filterStage.locator(".stage-metrics strong").allTextContents()).toEqual(["50","40","10"]);
+  await expect(page.getByText("104.18.1.21:443")).toBeVisible({timeout:8000});
+  await expect(page.locator(".table__cell").filter({hasText:/^CN$/})).toHaveCount(0);
+});
