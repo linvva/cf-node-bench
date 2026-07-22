@@ -57,6 +57,21 @@ test("settings and sources fit without overlap",async({page},testInfo)=>{
   expect(clipped).toBe(0);
 });
 
+test("source enable switches update the active count",async({page})=>{
+  await page.goto("/");
+  await page.getByRole("button",{name:"数据源"}).click();
+  const firstSource=page.getByRole("switch",{name:"社区示例源 A 启用状态"});
+  const secondSource=page.getByRole("switch",{name:"社区示例源 B 启用状态"});
+  await expect(firstSource).toBeChecked();
+  await expect(secondSource).not.toBeChecked();
+  await firstSource.click();
+  await expect(firstSource).not.toBeChecked();
+  await expect(page.locator(".section-heading span")).toHaveText("0 / 2 已启用");
+  await secondSource.click();
+  await expect(secondSource).toBeChecked();
+  await expect(page.locator(".section-heading span")).toHaveText("1 / 2 已启用");
+});
+
 test("blocked countries change filter totals and results",async({page})=>{
   await page.goto("/");
   await page.getByRole("button",{name:"设置"}).click();
