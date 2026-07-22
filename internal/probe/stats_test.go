@@ -50,6 +50,14 @@ func TestHTTPSAndBandwidthWithVerifiedTLS(t *testing.T) {
 	}
 }
 
+func TestHTTPSClientDoesNotUseProxy(t *testing.T) {
+	client := (HTTPSProber{ConnectTimeout: time.Second}).client(model.Candidate{IP: "127.0.0.1", Port: 443})
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.Proxy != nil {
+		t.Fatal("HTTPS probe transport must always connect directly")
+	}
+}
+
 func TestHTTPSClassifiesTimeout(t *testing.T) {
 	server, roots := speedServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(150 * time.Millisecond)

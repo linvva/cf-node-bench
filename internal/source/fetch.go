@@ -67,7 +67,7 @@ func (f Fetcher) fetchOnce(ctx context.Context, source HTTPSource) (ParseResult,
 		if timeout <= 0 {
 			timeout = 15 * time.Second
 		}
-		client = &http.Client{Timeout: timeout}
+		client = newDirectHTTPClient(timeout)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, nil)
 	if err != nil {
@@ -90,4 +90,10 @@ func (f Fetcher) fetchOnce(ctx context.Context, source HTTPSource) (ParseResult,
 		return ParseResult{}, err
 	}
 	return Parse(body, source.ID), nil
+}
+
+func newDirectHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return &http.Client{Transport: transport, Timeout: timeout}
 }

@@ -1,18 +1,33 @@
 import { useMemo, useState } from "react";
-import { Button, Checkbox, Drawer, Input, Table, toast } from "@heroui/react";
-import { Clipboard, Download, Search, X } from "lucide-react";
+import { Button, Checkbox, Drawer, Input, Popover, Table, toast } from "@heroui/react";
+import { Clipboard, Download, Search, SlidersHorizontal, X } from "lucide-react";
 import type { ProbeResult, RunSummary } from "../../types";
 
 type SortKey = "score" | "tcp" | "https" | "bandwidth";
+export interface CopyFields { country: boolean; tcpLatency: boolean; httpLatency: boolean; bandwidth: boolean }
+
+const defaultCopyFields: CopyFields = { country: true, tcpLatency: false, httpLatency: false, bandwidth: false };
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 const ms = (value: number) => `${value.toFixed(1)} ms`;
 const keyOf = (item: ProbeResult) => `${item.candidate.ip}:${item.candidate.port}`;
+
+export function formatCopyResults(results: ProbeResult[], fields: CopyFields) {
+  return results.map((item) => {
+    const country = fields.country && item.candidate.country ? `#${item.candidate.country}` : "";
+    const values = [`${keyOf(item)}${country}`];
+    if (fields.tcpLatency) values.push(`TCP ${item.tcp.p95Ms.toFixed(1)} ms`);
+    if (fields.httpLatency) values.push(`HTTP ${item.https.averageMs.toFixed(1)} ms`);
+    if (fields.bandwidth) values.push(`${item.bandwidth.mbps.toFixed(1)} Mbps`);
+    return values.join("\t");
+  }).join("\n");
+}
 
 export function ResultsTable({ summary }: { summary?: RunSummary }) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("score");
   const [selected, setSelected] = useState<ProbeResult>();
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [copyFields, setCopyFields] = useState<CopyFields>(defaultCopyFields);
   const results = useMemo(
     () => [...(summary?.results || [])]
       .filter((item) => `${keyOf(item)} ${item.candidate.country}`.toLowerCase().includes(query.toLowerCase()))
@@ -21,7 +36,7 @@ export function ResultsTable({ summary }: { summary?: RunSummary }) {
   );
   const output = selectedKeys.size ? results.filter((item) => selectedKeys.has(keyOf(item))) : results;
   const copy = async () => {
-    await navigator.clipboard.writeText(output.map(keyOf).join("\n"));
+    await navigator.clipboard.writeText(formatCopyResults(output, copyFields));
     toast.success(`已复制 ${output.length} 个节点`);
   };
   const exportCSV = () => {
@@ -41,7 +56,13 @@ export function ResultsTable({ summary }: { summary?: RunSummary }) {
       <Input className="search" aria-label="筛选节点" placeholder="筛选 IP、端口或国家" value={query} onChange={(event) => setQuery(event.target.value)} />
       <Button variant="secondary" onPress={() => setSort(sort === "score" ? "tcp" : sort === "tcp" ? "https" : sort === "https" ? "bandwidth" : "score")}>排序：{{ score: "综合分", tcp: "TCP P95", https: "HTTPS P95", bandwidth: "带宽" }[sort]}</Button>
       <span className="spacer" /><span className="results-summary">{selectedKeys.size ? `已选 ${selectedKeys.size}` : `${results.length} 个节点`}</span>
-      <span title="复制 IP:端口"><Button isIconOnly variant="tertiary" aria-label="复制结果" isDisabled={!results.length} onPress={() => void copy()}><Clipboard size={15} /></Button></span>
+      <Popover><Popover.Trigger><Button isIconOnly variant="tertiary" aria-label="复制选项" isDisabled={!results.length}><SlidersHorizontal size={15} /></Button></Popover.Trigger><Popover.Content isNonModal placement="bottom end"><Popover.Dialog className="copy-options"><Popover.Heading>复制内容</Popover.Heading><div className="copy-options-list">
+        <CopyOption label="国家代码" selected={copyFields.country} onChange={(country) => setCopyFields((fields) => ({ ...fields, country }))} />
+        <CopyOption label="TCP P95" selected={copyFields.tcpLatency} onChange={(tcpLatency) => setCopyFields((fields) => ({ ...fields, tcpLatency }))} />
+        <CopyOption label="HTTP 平均延迟" selected={copyFields.httpLatency} onChange={(httpLatency) => setCopyFields((fields) => ({ ...fields, httpLatency }))} />
+        <CopyOption label="下载带宽" selected={copyFields.bandwidth} onChange={(bandwidth) => setCopyFields((fields) => ({ ...fields, bandwidth }))} />
+      </div></Popover.Dialog></Popover.Content></Popover>
+      <span title="复制结果"><Button isIconOnly variant="tertiary" aria-label="复制结果" isDisabled={!results.length} onPress={() => void copy()}><Clipboard size={15} /></Button></span>
       <span title="导出 CSV"><Button isIconOnly variant="tertiary" aria-label="导出 CSV" isDisabled={!results.length} onPress={exportCSV}><Download size={15} /></Button></span>
     </div>
     {results.length ? <Table variant="secondary"><Table.ScrollContainer><Table.Content aria-label="Cloudflare 节点测速结果" selectionMode="multiple" selectedKeys={selectedKeys} onSelectionChange={(keys) => setSelectedKeys(keys === "all" ? new Set(results.map(keyOf)) : new Set([...keys].map(String)))}>
@@ -64,4 +85,8 @@ export function ResultsTable({ summary }: { summary?: RunSummary }) {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return <div className="drawer-metric"><label>{label}</label><strong>{value}</strong></div>;
+}
+
+function CopyOption({ label, selected, onChange }: { label: string; selected: boolean; onChange: (value: boolean) => void }) {
+  return <Checkbox isSelected={selected} onChange={onChange}><Checkbox.Content><Checkbox.Control><Checkbox.Indicator /></Checkbox.Control>{label}</Checkbox.Content></Checkbox>;
 }

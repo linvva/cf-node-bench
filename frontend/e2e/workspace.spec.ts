@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 test("workspace remains stable through a complete run",async({page},testInfo)=>{
+  await page.addInitScript(()=>{
+    Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText:async(value:string)=>{(window as typeof window&{__copiedText?:string}).__copiedText=value;}}});
+  });
   await page.goto("/");
   await expect(page.getByRole("heading",{name:"测速工作台"})).toBeVisible();
   const stage=page.getByLabel("测速阶段");
@@ -17,6 +20,13 @@ test("workspace remains stable through a complete run",async({page},testInfo)=>{
   await page.screenshot({path:testInfo.outputPath("drawer.png"),fullPage:true});
   await page.getByRole("button",{name:"关闭"}).click();
   await expect(page.locator('[data-slot="drawer-content"]')).not.toBeVisible();
+  await page.getByLabel("复制选项").click();
+  await expect(page.getByRole("checkbox",{name:"国家代码"})).toBeChecked();
+  await page.locator('[data-slot="checkbox-content"]').filter({hasText:"TCP P95"}).click();
+  await page.locator('[data-slot="checkbox-content"]').filter({hasText:"HTTP 平均延迟"}).click();
+  await page.locator('[data-slot="checkbox-content"]').filter({hasText:"下载带宽"}).click();
+  await page.getByRole("button",{name:"复制结果"}).click();
+  expect(await page.evaluate(()=>(window as typeof window&{__copiedText?:string}).__copiedText?.split("\n")[0])).toBe("104.18.1.20:8443#CN\tTCP 22.0 ms\tHTTP 44.0 ms\t186.0 Mbps");
   await page.screenshot({path:testInfo.outputPath("workspace.png"),fullPage:true});
   const overflow=await page.evaluate(()=>({x:document.documentElement.scrollWidth-document.documentElement.clientWidth,y:document.documentElement.scrollHeight-document.documentElement.clientHeight}));
   expect(overflow.x).toBe(0); expect(overflow.y).toBe(0);
@@ -62,12 +72,13 @@ test("source enable switches update the active count",async({page})=>{
   await page.getByRole("button",{name:"数据源"}).click();
   const firstSource=page.getByRole("switch",{name:"社区示例源 A 启用状态"});
   const secondSource=page.getByRole("switch",{name:"社区示例源 B 启用状态"});
+  const switches=page.locator('[data-slot="switch-content"]');
   await expect(firstSource).toBeChecked();
   await expect(secondSource).not.toBeChecked();
-  await firstSource.click();
+  await switches.nth(0).click();
   await expect(firstSource).not.toBeChecked();
   await expect(page.locator(".section-heading span")).toHaveText("0 / 2 已启用");
-  await secondSource.click();
+  await switches.nth(1).click();
   await expect(secondSource).toBeChecked();
   await expect(page.locator(".section-heading span")).toHaveText("1 / 2 已启用");
 });
