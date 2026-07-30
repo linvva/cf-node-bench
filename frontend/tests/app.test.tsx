@@ -74,11 +74,50 @@ describe("CF Node Bench workspace",()=>{
     expect(await screen.findByText("启用 Cloudflare 前必须填写 Token、Zone ID 和记录名")).toBeInTheDocument();
   });
 
+  it("guides Cloudflare and GitHub repository setup with minimal permissions",async()=>{
+    render(<App/>); await screen.findByRole("heading",{name:"测速工作台"});
+    fireEvent.click(screen.getByRole("button",{name:"发布"}));
+    const open=vi.spyOn(window,"open").mockImplementation(()=>null);
+    fireEvent.click(await screen.findByRole("button",{name:"Cloudflare 配置引导"}));
+    expect(await screen.findByRole("heading",{name:"配置 Cloudflare DNS"})).toBeInTheDocument();
+    expect(screen.getByText(/将资源范围限制为目标 Zone/)).toHaveTextContent("Edit zone DNS");
+    expect(screen.getByText(/Managed by CF Node Bench/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button",{name:"打开控制台"}));
+    expect(open).toHaveBeenCalledWith("https://dash.cloudflare.com/","_blank","noopener,noreferrer");
+    fireEvent.click(screen.getByRole("button",{name:"创建 API Token"}));
+    expect(open).toHaveBeenCalledWith("https://dash.cloudflare.com/profile/api-tokens","_blank","noopener,noreferrer");
+    fireEvent.click(screen.getByRole("button",{name:"关闭 Cloudflare 配置引导"}));
+    await waitFor(()=>expect(screen.queryByRole("heading",{name:"配置 Cloudflare DNS"})).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button",{name:"GitHub 仓库配置引导"}));
+    expect(await screen.findByRole("heading",{name:"配置 GitHub 仓库"})).toBeInTheDocument();
+    expect(screen.getByText(/文件无需预建/)).toBeInTheDocument();
+    expect(screen.getByText(/Repository permissions/)).toHaveTextContent("Read and write");
+    fireEvent.click(screen.getByRole("button",{name:"创建仓库"}));
+    expect(open).toHaveBeenCalledWith("https://github.com/new","_blank","noopener,noreferrer");
+    fireEvent.click(screen.getByRole("button",{name:"创建 Token"}));
+    expect(open).toHaveBeenCalledWith("https://github.com/settings/personal-access-tokens/new","_blank","noopener,noreferrer");
+    fireEvent.click(screen.getByRole("button",{name:"关闭 GitHub 仓库配置引导"}));
+    await waitFor(()=>expect(screen.queryByRole("heading",{name:"配置 GitHub 仓库"})).not.toBeInTheDocument());
+    open.mockRestore();
+  });
+
   it("keeps Gist separate from repository publishing and validates its credentials",async()=>{
     render(<App/>); await screen.findByRole("heading",{name:"测速工作台"});
     fireEvent.click(screen.getByRole("button",{name:"发布"}));
     expect(await screen.findByRole("switch",{name:"启用 GitHub 仓库"})).toBeInTheDocument();
     expect(screen.getByText(/Secret Gist 只是未公开列出/)).toBeInTheDocument();
+    const open=vi.spyOn(window,"open").mockImplementation(()=>null);
+    fireEvent.click(screen.getByRole("button",{name:"Gist 配置引导"}));
+    expect(await screen.findByRole("heading",{name:"配置 GitHub Gist"})).toBeInTheDocument();
+    expect(screen.getByText(/新建文件/)).toHaveTextContent("ip.txt");
+    expect(screen.getByText(/Account permissions/)).toHaveTextContent("Gists");
+    fireEvent.click(screen.getByRole("button",{name:"创建 Gist"}));
+    expect(open).toHaveBeenCalledWith("https://gist.github.com/","_blank","noopener,noreferrer");
+    fireEvent.click(screen.getByRole("button",{name:"创建 Token"}));
+    expect(open).toHaveBeenCalledWith("https://github.com/settings/personal-access-tokens/new","_blank","noopener,noreferrer");
+    fireEvent.click(screen.getByRole("button",{name:"关闭 Gist 配置引导"}));
+    await waitFor(()=>expect(screen.queryByRole("heading",{name:"配置 GitHub Gist"})).not.toBeInTheDocument());
+    open.mockRestore();
     fireEvent.click(screen.getByRole("switch",{name:"启用 GitHub Gist"}));
     fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
     expect(await screen.findByText("启用 Gist 前必须填写 Token、Gist ID 和文件名")).toBeInTheDocument();

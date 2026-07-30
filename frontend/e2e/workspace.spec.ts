@@ -117,6 +117,22 @@ test("publish settings switch modes without overlap",async({page},testInfo)=>{
   await expect(page.getByRole("switch",{name:"启用 GitHub 仓库"})).toBeVisible();
   await expect(page.getByRole("switch",{name:"启用 GitHub Gist"})).toBeVisible();
   await expect(page.getByText(/Secret Gist 只是未公开列出/)).toBeVisible();
+  const inspectSetupGuide=async(buttonName:string,heading:string,closeName:string,permission:string,screenshot:string)=>{
+    await page.getByRole("button",{name:buttonName}).click();
+    const dialog=page.getByRole("dialog");
+    await expect(dialog.getByRole("heading",{name:heading})).toBeVisible();
+    await expect(dialog).toContainText(permission);
+    const dialogBox=await dialog.boundingBox();
+    expect(dialogBox?.width).toBeLessThanOrEqual(testInfo.project.use.viewport!.width);
+    expect(dialogBox?.height).toBeLessThanOrEqual(testInfo.project.use.viewport!.height);
+    await page.waitForTimeout(350);
+    await page.screenshot({path:testInfo.outputPath(screenshot)});
+    await dialog.getByRole("button",{name:closeName}).click();
+    await expect(dialog).not.toBeVisible();
+  };
+  await inspectSetupGuide("Cloudflare 配置引导","配置 Cloudflare DNS","关闭 Cloudflare 配置引导","Edit zone DNS","cloudflare-guide.png");
+  await inspectSetupGuide("GitHub 仓库配置引导","配置 GitHub 仓库","关闭 GitHub 仓库配置引导","Read and write","github-repository-guide.png");
+  await inspectSetupGuide("Gist 配置引导","配置 GitHub Gist","关闭 Gist 配置引导","Read and write","gist-guide.png");
   await expect(page.getByText("启用 Cloudflare 代理")).toBeVisible();
   await page.getByRole("tab",{name:"TXT 记录"}).click();
   await expect(page.getByText("启用 Cloudflare 代理")).not.toBeVisible();

@@ -7,6 +7,7 @@ import workerSource from "../../../../deploy/telegram-relay/worker.js?raw";
 
 const labels:Record<PublishTarget,string>={cloudflare:"Cloudflare",github:"GitHub 仓库",gist:"GitHub Gist",telegram:"Telegram"};
 type PublishTokens={cloudflareToken:string;githubToken:string;gistToken:string;telegramBotToken:string;telegramRelayKey:string};
+type SetupGuideTarget="cloudflare"|"github"|"gist"|"";
 const emptyTokens:PublishTokens={cloudflareToken:"",githubToken:"",gistToken:"",telegramBotToken:"",telegramRelayKey:""};
 
 export function PublishPage(){
@@ -16,6 +17,7 @@ export function PublishPage(){
   const [tokens,setTokens]=useState<PublishTokens>(emptyTokens);
   const [error,setError]=useState("");
   const [busy,setBusy]=useState("");
+  const [setupGuide,setSetupGuide]=useState<SetupGuideTarget>("");
   const [relayGuideOpen,setRelayGuideOpen]=useState(false);
   useEffect(()=>setForm(structuredClone(settings)),[settings]);
 
@@ -77,6 +79,7 @@ export function PublishPage(){
         <NumberField label="TTL" value={form.cloudflare.ttl} min={1} max={86400} onChange={ttl=>patch("cloudflare",{...form.cloudflare,ttl})}/>
         {form.cloudflare.recordType==="A"&&<div className="switch-field"><Switch isSelected={form.cloudflare.proxied} onChange={proxied=>patch("cloudflare",{...form.cloudflare,proxied})}><Switch.Content><Switch.Control><Switch.Thumb/></Switch.Control><span>启用 Cloudflare 代理</span></Switch.Content></Switch><small>关闭时 DNS 返回节点原始 IP。</small></div>}
         <CredentialField label="API Token" configured={form.cloudflare.tokenConfigured} value={tokens.cloudflareToken} onChange={cloudflareToken=>setTokens(current=>({...current,cloudflareToken}))} onClear={()=>void clear("cloudflare","cloudflareToken","Cloudflare 凭据")} clearing={busy==="clear-cloudflare"}/>
+        <div className="field-wide target-guide"><small>需要目标域名的 Zone ID，以及仅限该 Zone 的 DNS 编辑 Token；记录无需预先创建。</small><Button variant="secondary" aria-label="Cloudflare 配置引导" onPress={()=>setSetupGuide("cloudflare")}><Cloud size={15}/>配置引导</Button></div>
       </div><TargetActions target="cloudflare" busy={busy} onTest={test}/>
     </section>
 
@@ -88,6 +91,7 @@ export function PublishPage(){
         <TextField label="Branch" value={form.github.branch} onChange={branch=>patch("github",{...form.github,branch})}/>
         <TextField label="文件路径" value={form.github.path} onChange={path=>patch("github",{...form.github,path})}/>
         <CredentialField label="Personal Access Token" configured={form.github.tokenConfigured} value={tokens.githubToken} onChange={githubToken=>setTokens(current=>({...current,githubToken}))} onClear={()=>void clear("github","githubToken","GitHub 仓库凭据")} clearing={busy==="clear-github"}/>
+        <div className="field-wide target-guide"><small>目标分支必须已存在；结果文件可由应用创建，Token 只需目标仓库的 Contents 写权限。</small><Button variant="secondary" aria-label="GitHub 仓库配置引导" onPress={()=>setSetupGuide("github")}><GitBranch size={15}/>配置引导</Button></div>
       </div><TargetActions target="github" busy={busy} onTest={test}/>
     </section>
 
@@ -97,6 +101,7 @@ export function PublishPage(){
         <TextField label="Gist ID" value={form.gist.gistId} placeholder="例如 6f4a..." help="仅更新已有 Gist；Secret Gist 只是未公开列出，任何获得链接的人仍可访问。" onChange={gistId=>patch("gist",{...form.gist,gistId})}/>
         <TextField label="文件名" value={form.gist.filename} help="同名文件会被更新，Gist 中的其他文件不受影响。" onChange={filename=>patch("gist",{...form.gist,filename})}/>
         <CredentialField label="Gist Personal Access Token" configured={form.gist.tokenConfigured} value={tokens.gistToken} onChange={gistToken=>setTokens(current=>({...current,gistToken}))} onClear={()=>void clear("gist","gistToken","GitHub Gist 凭据")} clearing={busy==="clear-gist"}/>
+        <div className="field-wide target-guide"><small>首次配置需要先创建包含目标文件的 Gist，再生成仅有 Gists 写权限的独立 Token。</small><Button variant="secondary" aria-label="Gist 配置引导" onPress={()=>setSetupGuide("gist")}><FileText size={15}/>配置引导</Button></div>
       </div><TargetActions target="gist" busy={busy} onTest={test}/>
     </section>
 
@@ -114,6 +119,9 @@ export function PublishPage(){
         </>}
       </div><TargetActions target="telegram" busy={busy} onTest={test}/>
     </section>
+    {setupGuide==="cloudflare"&&<CloudflareGuide onClose={()=>setSetupGuide("")}/>}
+    {setupGuide==="github"&&<GitHubGuide onClose={()=>setSetupGuide("")}/>}
+    {setupGuide==="gist"&&<GistGuide filename={form.gist.filename.trim()||"ip.txt"} onClose={()=>setSetupGuide("")}/>}
     {relayGuideOpen&&<RelayGuide onClose={()=>setRelayGuideOpen(false)}/>}
   </div>;
 }
@@ -179,9 +187,52 @@ function Check({label,selected,onChange}:{label:string;selected:boolean;onChange
   return <Checkbox isSelected={selected} onChange={onChange}><Checkbox.Content><Checkbox.Control><Checkbox.Indicator/></Checkbox.Control>{label}</Checkbox.Content></Checkbox>;
 }
 
+function openExternal(url:string){
+  if(window.runtime?.BrowserOpenURL)window.runtime.BrowserOpenURL(url);
+  else window.open(url,"_blank","noopener,noreferrer");
+}
+
+function CloudflareGuide({onClose}:{onClose:()=>void}){
+  return <Modal isOpen onOpenChange={open=>{if(!open)onClose()}}><Modal.Trigger className="sr-only" aria-label="Cloudflare 配置引导弹窗"><span/></Modal.Trigger><Modal.Backdrop variant="opaque"><Modal.Container size="lg" scroll="inside"><Modal.Dialog className="setup-guide"><Modal.Header><Modal.Heading>配置 Cloudflare DNS</Modal.Heading><Modal.CloseTrigger aria-label="关闭 Cloudflare 配置引导"><X size={17}/></Modal.CloseTrigger></Modal.Header><Modal.Body>
+    <p className="relay-guide-intro">应用会创建和更新测速结果对应的 DNS 记录，无需提前手动创建记录。</p>
+    <ol className="relay-guide-steps">
+      <li><strong>复制 Zone ID</strong><span>在 Cloudflare 控制台打开目标域名，从 Overview 页的 API 区域复制 <code>Zone ID</code>。</span></li>
+      <li><strong>创建 API Token</strong><span>使用 <code>Edit zone DNS</code> 模板，将资源范围限制为目标 Zone。该权限包含 DNS 记录的读取和编辑。</span></li>
+      <li><strong>选择记录模式</strong><span>填写完整记录名。A 模式只发布 443 端口 IPv4，Proxied 仅在此模式生效；TXT 模式发布完整节点行。</span></li>
+      <li><strong>保存并测试</strong><span>保存后测试连接。测速成功完成时，应用会自动发布到当前配置的记录名。</span></li>
+    </ol>
+    <p className="relay-guide-caution">应用只删除 comment 为 <code>Managed by CF Node Bench</code> 的同名 A/TXT 记录，不会删除没有该标记的用户记录。</p>
+  </Modal.Body><Modal.Footer><Button variant="secondary" onPress={()=>openExternal("https://dash.cloudflare.com/")}><ExternalLink size={15}/>打开控制台</Button><Button variant="primary" onPress={()=>openExternal("https://dash.cloudflare.com/profile/api-tokens")}><ExternalLink size={15}/>创建 API Token</Button></Modal.Footer></Modal.Dialog></Modal.Container></Modal.Backdrop></Modal>;
+}
+
+function GitHubGuide({onClose}:{onClose:()=>void}){
+  return <Modal isOpen onOpenChange={open=>{if(!open)onClose()}}><Modal.Trigger className="sr-only" aria-label="GitHub 仓库配置引导弹窗"><span/></Modal.Trigger><Modal.Backdrop variant="opaque"><Modal.Container size="lg" scroll="inside"><Modal.Dialog className="setup-guide"><Modal.Header><Modal.Heading>配置 GitHub 仓库</Modal.Heading><Modal.CloseTrigger aria-label="关闭 GitHub 仓库配置引导"><X size={17}/></Modal.CloseTrigger></Modal.Header><Modal.Body>
+    <p className="relay-guide-intro">应用通过 GitHub Contents API 创建或更新结果文件；仓库和目标分支需要预先存在，文件无需预建。</p>
+    <ol className="relay-guide-steps">
+      <li><strong>准备仓库</strong><span>创建或选择一个仓库，确认准备写入的目标分支已经存在。</span></li>
+      <li><strong>填写目标位置</strong><span><code>Owner</code> 是用户或组织名；Repository 不含 <code>.git</code>；文件路径使用仓库内相对路径，例如 <code>ip.txt</code>。</span></li>
+      <li><strong>创建 Token</strong><span>新建 Fine-grained personal access token，只选择目标仓库，并将 Repository permissions 中的 <code>Contents</code> 设为 <code>Read and write</code>。</span></li>
+      <li><strong>保存并测试</strong><span>测试连接只验证仓库可访问；文件写权限会在首次实际发布时验证。</span></li>
+    </ol>
+    <p className="relay-guide-caution">请使用独立且有有效期的 Token。若文件路径位于 <code>.github/workflows</code>，GitHub 还会要求额外的 Workflows 写权限。</p>
+  </Modal.Body><Modal.Footer><Button variant="secondary" onPress={()=>openExternal("https://github.com/new")}><ExternalLink size={15}/>创建仓库</Button><Button variant="primary" onPress={()=>openExternal("https://github.com/settings/personal-access-tokens/new")}><ExternalLink size={15}/>创建 Token</Button></Modal.Footer></Modal.Dialog></Modal.Container></Modal.Backdrop></Modal>;
+}
+
+function GistGuide({filename,onClose}:{filename:string;onClose:()=>void}){
+  return <Modal isOpen onOpenChange={open=>{if(!open)onClose()}}><Modal.Trigger className="sr-only" aria-label="GitHub Gist 配置引导"><span/></Modal.Trigger><Modal.Backdrop variant="opaque"><Modal.Container size="lg" scroll="inside"><Modal.Dialog className="setup-guide"><Modal.Header><Modal.Heading>配置 GitHub Gist</Modal.Heading><Modal.CloseTrigger aria-label="关闭 Gist 配置引导"><X size={17}/></Modal.CloseTrigger></Modal.Header><Modal.Body>
+    <p className="relay-guide-intro">应用只更新你指定的现有 Gist，不会创建 Gist 或改变其可见性。按以下步骤完成首次配置。</p>
+    <ol className="relay-guide-steps">
+      <li><strong>创建文件</strong><span>打开 Gist，新建文件 <code>{filename}</code>，填入任意初始内容，然后创建 Secret 或 Public Gist。</span></li>
+      <li><strong>填写 Gist ID</strong><span>创建后，从地址 <code>gist.github.com/用户名/GistID</code> 复制最后一段 Gist ID，填回当前页面。</span></li>
+      <li><strong>创建 Token</strong><span>新建 Fine-grained personal access token，在 Account permissions 中仅将 <code>Gists</code> 设为 <code>Read and write</code>，并设置合理有效期。</span></li>
+      <li><strong>保存并测试</strong><span>Token 只会保存在本机。填写后保存设置并测试连接；首次实际发布会验证写权限。</span></li>
+    </ol>
+    <p className="relay-guide-caution">Secret Gist 只是不会公开列出，并非私有存储。不要在文件内容中放入 Token、账号凭据或其他敏感信息。</p>
+  </Modal.Body><Modal.Footer><Button variant="secondary" onPress={()=>openExternal("https://gist.github.com/")}><ExternalLink size={15}/>创建 Gist</Button><Button variant="primary" onPress={()=>openExternal("https://github.com/settings/personal-access-tokens/new")}><ExternalLink size={15}/>创建 Token</Button></Modal.Footer></Modal.Dialog></Modal.Container></Modal.Backdrop></Modal>;
+}
+
 function RelayGuide({onClose}:{onClose:()=>void}){
   const copyWorker=async()=>{try{await navigator.clipboard.writeText(workerSource);toast.success("worker.js 已复制");}catch(reason){toast.danger(`复制失败：${String(reason)}`);}};
-  const openDashboard=()=>{const url="https://dash.cloudflare.com/";if(window.runtime?.BrowserOpenURL)window.runtime.BrowserOpenURL(url);else window.open(url,"_blank","noopener,noreferrer");};
   return <Modal isOpen onOpenChange={open=>{if(!open)onClose()}}><Modal.Trigger className="sr-only" aria-label="Worker 部署引导"><span/></Modal.Trigger><Modal.Backdrop variant="opaque"><Modal.Container size="lg" scroll="inside"><Modal.Dialog className="relay-guide"><Modal.Header><Modal.Heading>部署 Telegram 专属中继</Modal.Heading><Modal.CloseTrigger aria-label="关闭部署引导"><X size={17}/></Modal.CloseTrigger></Modal.Header><Modal.Body>
     <p className="relay-guide-intro">将下方 Worker 部署到你自己的 Cloudflare 账户。Worker 只转发本应用需要的两种 Telegram 请求，不保存 Bot Token、Chat ID 或消息。</p>
     <ol className="relay-guide-steps">
@@ -192,5 +243,5 @@ function RelayGuide({onClose}:{onClose:()=>void}){
     <div className="relay-code-toolbar"><div><strong>worker.js</strong><span>内置版本，可直接部署</span></div><Button variant="secondary" onPress={()=>void copyWorker()}><Copy size={15}/>复制代码</Button></div>
     <pre className="relay-worker-code" aria-label="worker.js 代码"><code>{workerSource.trim()}</code></pre>
     <p className="relay-guide-caution">不要使用第三方提供的公共中继，也不要为 Worker 接入会记录请求正文的日志或调试服务。</p>
-  </Modal.Body><Modal.Footer><Button variant="secondary" onPress={openDashboard}><ExternalLink size={15}/>打开 Cloudflare 控制台</Button><Button variant="primary" onPress={onClose}>完成</Button></Modal.Footer></Modal.Dialog></Modal.Container></Modal.Backdrop></Modal>;
+  </Modal.Body><Modal.Footer><Button variant="secondary" onPress={()=>openExternal("https://dash.cloudflare.com/")}><ExternalLink size={15}/>打开 Cloudflare 控制台</Button><Button variant="primary" onPress={onClose}>完成</Button></Modal.Footer></Modal.Dialog></Modal.Container></Modal.Backdrop></Modal>;
 }
