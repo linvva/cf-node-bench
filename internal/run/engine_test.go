@@ -25,7 +25,7 @@ type fakeTCP struct {
 	candidates *[]model.Candidate
 }
 
-func (f fakeTCP) Probe(ctx context.Context, c model.Candidate, n int) model.ProbeStats {
+func (f fakeTCP) Probe(ctx context.Context, c model.Candidate, n int, onAttempt func()) model.ProbeStats {
 	if f.attempts != nil {
 		*f.attempts = n
 	}
@@ -34,6 +34,11 @@ func (f fakeTCP) Probe(ctx context.Context, c model.Candidate, n int) model.Prob
 	}
 	select {
 	case <-time.After(f.delay):
+		for range n {
+			if onAttempt != nil {
+				onAttempt()
+			}
+		}
 		return model.ProbeStats{Attempts: n, Successes: n, SuccessRate: 1, P95MS: 10}
 	case <-ctx.Done():
 		return model.ProbeStats{Attempts: n, Failures: map[model.FailureReason]int{model.FailureCancelled: 1}}
@@ -70,7 +75,12 @@ func TestEngineFiltersBlockedCountryBeforeTCP(t *testing.T) {
 
 type timeoutTCP struct{}
 
-func (timeoutTCP) Probe(_ context.Context, _ model.Candidate, attempts int) model.ProbeStats {
+func (timeoutTCP) Probe(_ context.Context, _ model.Candidate, attempts int, onAttempt func()) model.ProbeStats {
+	for range attempts {
+		if onAttempt != nil {
+			onAttempt()
+		}
+	}
 	return model.ProbeStats{Attempts: attempts, Failures: map[model.FailureReason]int{model.FailureTimeout: attempts}}
 }
 
@@ -103,9 +113,14 @@ func completedStage(updates []model.RunProgress, name string) model.StageProgres
 
 type fakeHTTPS struct{ attempts *int }
 
-func (f fakeHTTPS) Probe(_ context.Context, _ model.Candidate, attempts int) model.ProbeStats {
+func (f fakeHTTPS) Probe(_ context.Context, _ model.Candidate, attempts int, onAttempt func()) model.ProbeStats {
 	if f.attempts != nil {
 		*f.attempts = attempts
+	}
+	for range attempts {
+		if onAttempt != nil {
+			onAttempt()
+		}
 	}
 	return model.ProbeStats{Attempts: 3, Successes: 3, SuccessRate: 1, P95MS: 20}
 }
@@ -114,6 +129,68 @@ type fakeBandwidth struct{}
 
 func (fakeBandwidth) Probe(context.Context, model.Candidate) model.BandwidthStats {
 	return model.BandwidthStats{Bytes: 1024, Mbps: 100}
+}
+
+type selectiveBandwidth struct {
+	failed map[string]bool
+	probed *[]string
+}
+
+func (f selectiveBandwidth) Probe(_ context.Context, candidate model.Candidate) model.BandwidthStats {
+	*f.probed = append(*f.probed, candidate.Key())
+	if f.failed[candidate.Key()] {
+		return model.BandwidthStats{Failure: model.FailureDownload}
+	}
+	return model.BandwidthStats{Bytes: 1024, Mbps: 100}
+}
+
+func TestBandwidthRefillsFromRemainingHTTPSCandidates(t *testing.T) {
+	settings := config.DefaultSettings()
+	settings.TCPConcurrency = 1
+	settings.HTTPSConcurrency = 1
+	settings.BandwidthConcurrency = 1
+	settings.TCPCandidateCount = 5
+	settings.BandwidthCandidates = 3
+	settings.FinalResultCount = 3
+	candidates := []model.Candidate{
+		{AddressType: model.AddressIPv4, IP: "1.1.1.1", Port: 443},
+		{AddressType: model.AddressIPv4, IP: "1.1.1.2", Port: 443},
+		{AddressType: model.AddressIPv4, IP: "1.1.1.3", Port: 443},
+		{AddressType: model.AddressIPv4, IP: "1.1.1.4", Port: 443},
+		{AddressType: model.AddressIPv4, IP: "1.1.1.5", Port: 443},
+	}
+	var probed []string
+	engine := Engine{Dependencies: Dependencies{
+		Fetcher: fakeFetcher{candidates: candidates},
+		TCP:     fakeTCP{},
+		HTTPS:   fakeHTTPS{},
+		Bandwidth: selectiveBandwidth{
+			failed: map[string]bool{candidates[0].Key(): true, candidates[1].Key(): true},
+			probed: &probed,
+		},
+	}}
+	var updates []model.RunProgress
+	summary := engine.Run(t.Context(), "bandwidth-refill", settings, []source.HTTPSource{{Enabled: true}}, func(progress model.RunProgress) {
+		updates = append(updates, progress)
+	})
+
+	if len(summary.Results) != 3 {
+		t.Fatalf("expected 3 successful bandwidth results, got %d", len(summary.Results))
+	}
+	if len(probed) != 5 {
+		t.Fatalf("expected all 5 candidates to be tried while refilling, got %v", probed)
+	}
+	seen := make(map[string]bool, len(probed))
+	for _, candidate := range probed {
+		if seen[candidate] {
+			t.Fatalf("candidate was probed more than once: %s", candidate)
+		}
+		seen[candidate] = true
+	}
+	stage := completedStage(updates, "bandwidth")
+	if stage.Input != 5 || stage.Passed != 3 || stage.Failed != 2 || stage.AttemptsCompleted != 5 || stage.AttemptsTotal != 5 {
+		t.Fatalf("bandwidth refill progress is inconsistent: %+v", stage)
+	}
 }
 
 func TestEngineCompletesPipeline(t *testing.T) {
@@ -144,6 +221,10 @@ func TestEngineCompletesPipeline(t *testing.T) {
 	if tcpAttempts != 2 || httpsAttempts != 4 {
 		t.Fatalf("independent probe counts not applied: tcp=%d https=%d", tcpAttempts, httpsAttempts)
 	}
+	tcpStage := completedStage(updates, "tcp")
+	if tcpStage.AttemptsCompleted != 2 || tcpStage.AttemptsTotal != 2 {
+		t.Fatalf("TCP attempt progress: %+v", tcpStage)
+	}
 }
 
 func TestEngineCancellation(t *testing.T) {
@@ -161,5 +242,41 @@ func TestEngineCancellation(t *testing.T) {
 	}
 	if time.Since(started) > 300*time.Millisecond {
 		t.Fatal("pipeline cancellation was not prompt")
+	}
+}
+
+func TestProgressEmitsOutsideStateLock(t *testing.T) {
+	var progress *progressTracker
+	emittedWhileLocked := false
+	progress = newProgress("lock-test", time.Now(), func(model.RunProgress) {
+		if !progress.mu.TryLock() {
+			emittedWhileLocked = true
+			return
+		}
+		progress.mu.Unlock()
+	})
+	progress.start("source", 1)
+	progress.summary(time.Now(), nil, "completed")
+	if emittedWhileLocked {
+		t.Fatal("progress event emitted while holding the state lock")
+	}
+}
+
+func TestProgressHeartbeatUpdatesSlowStage(t *testing.T) {
+	updates := make(chan model.RunProgress, 8)
+	progress := newProgress("heartbeat-test", time.Now(), func(value model.RunProgress) { updates <- value })
+	progress.startProbe("https", 2, 3)
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case update := <-updates:
+			if len(update.Stages) > 0 && update.Stages[0].DurationMS > 0 {
+				progress.summary(time.Now(), nil, "completed")
+				return
+			}
+		case <-deadline:
+			progress.summary(time.Now(), nil, "cancelled")
+			t.Fatal("slow stage did not emit a heartbeat update")
+		}
 	}
 }

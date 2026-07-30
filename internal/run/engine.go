@@ -17,10 +17,10 @@ type SourceFetcher interface {
 	Fetch(context.Context, source.HTTPSource) (source.ParseResult, error)
 }
 type TCPProbe interface {
-	Probe(context.Context, model.Candidate, int) model.ProbeStats
+	Probe(context.Context, model.Candidate, int, func()) model.ProbeStats
 }
 type HTTPSProbe interface {
-	Probe(context.Context, model.Candidate, int) model.ProbeStats
+	Probe(context.Context, model.Candidate, int, func()) model.ProbeStats
 }
 type BandwidthProbe interface {
 	Probe(context.Context, model.Candidate) model.BandwidthStats
@@ -92,10 +92,10 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 	progress.addFailures(filterFailures)
 	progress.finishAt("filter", filterInput, len(candidates), filterFailed, filterStarted)
 
-	progress.start("tcp", len(candidates))
+	progress.startProbe("tcp", len(candidates), settings.TCPProbeCount)
 	tcpStarted := time.Now()
 	tcpResults := parallel(ctx, candidates, settings.TCPConcurrency, func(ctx context.Context, candidate model.Candidate) model.ProbeResult {
-		return model.ProbeResult{Candidate: candidate, TCP: e.Dependencies.TCP.Probe(ctx, candidate, settings.TCPProbeCount)}
+		return model.ProbeResult{Candidate: candidate, TCP: e.Dependencies.TCP.Probe(ctx, candidate, settings.TCPProbeCount, func() { progress.attempt("tcp") })}
 	}, func(result model.ProbeResult) {
 		passed := result.TCP.SuccessRate >= settings.TCPMinSuccessRate
 		progress.advance("tcp", passed, nodeFailure(passed, result.TCP.Failures, model.FailureTCP))
@@ -111,10 +111,10 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 		return progress.summary(started, nil, "cancelled")
 	}
 
-	progress.start("https", len(tcpResults))
+	progress.startProbe("https", len(tcpResults), settings.HTTPSProbeCount)
 	httpsStarted := time.Now()
 	httpsResults := parallel(ctx, tcpResults, settings.HTTPSConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
-		result.HTTPS = e.Dependencies.HTTPS.Probe(ctx, result.Candidate, settings.HTTPSProbeCount)
+		result.HTTPS = e.Dependencies.HTTPS.Probe(ctx, result.Candidate, settings.HTTPSProbeCount, func() { progress.attempt("https") })
 		return result
 	}, func(result model.ProbeResult) {
 		passed := result.HTTPS.SuccessRate >= settings.HTTPSMinSuccessRate
@@ -128,22 +128,32 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 		return progress.summary(started, nil, "cancelled")
 	}
 
-	if len(httpsResults) > settings.BandwidthCandidates {
-		httpsResults = httpsResults[:settings.BandwidthCandidates]
-	}
-	progress.start("bandwidth", len(httpsResults))
+	bandwidthTarget := min(settings.BandwidthCandidates, len(httpsResults))
+	progress.startProbe("bandwidth", bandwidthTarget, 1)
 	bandStarted := time.Now()
-	results = parallel(ctx, httpsResults, settings.BandwidthConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
-		result.Bandwidth = e.Dependencies.Bandwidth.Probe(ctx, result.Candidate)
-		return result
-	}, func(result model.ProbeResult) {
-		failures := map[model.FailureReason]int{}
-		if result.Bandwidth.Failure != "" {
-			failures[result.Bandwidth.Failure] = 1
+	passedBand := 0
+	nextCandidate := 0
+	for passedBand < bandwidthTarget && nextCandidate < len(httpsResults) && ctx.Err() == nil {
+		batchSize := min(bandwidthTarget-passedBand, len(httpsResults)-nextCandidate)
+		if nextCandidate > 0 {
+			progress.extendProbe("bandwidth", batchSize, 1)
 		}
-		progress.advance("bandwidth", result.Bandwidth.Mbps > 0 && result.Bandwidth.Failure == "", failures)
-	})
-	passedBand := countIf(results, func(r model.ProbeResult) bool { return r.Bandwidth.Mbps > 0 && r.Bandwidth.Failure == "" })
+		batch := httpsResults[nextCandidate : nextCandidate+batchSize]
+		nextCandidate += batchSize
+		batchResults := parallel(ctx, batch, settings.BandwidthConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
+			result.Bandwidth = e.Dependencies.Bandwidth.Probe(ctx, result.Candidate)
+			progress.attempt("bandwidth")
+			return result
+		}, func(result model.ProbeResult) {
+			failures := map[model.FailureReason]int{}
+			if result.Bandwidth.Failure != "" {
+				failures[result.Bandwidth.Failure] = 1
+			}
+			progress.advance("bandwidth", bandwidthPassed(result), failures)
+		})
+		results = append(results, batchResults...)
+		passedBand += countIf(batchResults, bandwidthPassed)
+	}
 	progress.finishAt("bandwidth", len(results), passedBand, len(results)-passedBand, bandStarted)
 	if ctx.Err() != nil {
 		return progress.summary(started, nil, "cancelled")
@@ -244,6 +254,9 @@ func countIf[T any](items []T, condition func(T) bool) int {
 	}
 	return count
 }
+func bandwidthPassed(result model.ProbeResult) bool {
+	return result.Bandwidth.Mbps > 0 && result.Bandwidth.Failure == ""
+}
 func unique(items []model.Candidate) []model.Candidate {
 	seen := map[string]bool{}
 	result := items[:0]
@@ -289,44 +302,71 @@ func nodeFailure(passed bool, failures map[model.FailureReason]int, fallback mod
 
 type progressTracker struct {
 	mu           sync.Mutex
+	emitMu       sync.Mutex
 	value        model.RunProgress
 	emit         func(model.RunProgress)
 	stageStarts  map[string]time.Time
 	stageUpdates map[string]int
-	lastEmit     time.Time
+	stop         chan struct{}
+	done         chan struct{}
+	stopOnce     sync.Once
 }
 
 func newProgress(id string, started time.Time, emit func(model.RunProgress)) *progressTracker {
-	return &progressTracker{
+	progress := &progressTracker{
 		value:        model.RunProgress{RunID: id, State: "running", StartedAt: started, Failures: map[model.FailureReason]int{}},
 		emit:         emit,
 		stageStarts:  map[string]time.Time{},
 		stageUpdates: map[string]int{},
 	}
+	if emit != nil {
+		progress.stop = make(chan struct{})
+		progress.done = make(chan struct{})
+		go progress.heartbeat()
+	}
+	return progress
 }
 func (p *progressTracker) start(name string, input int) {
+	p.startProbe(name, input, 0)
+}
+func (p *progressTracker) startProbe(name string, input, attemptsPerInput int) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.stageStarts[name] = time.Now()
-	p.value.Stages = append(p.value.Stages, model.StageProgress{Name: name, Input: input, State: "running"})
-	p.sendLocked()
+	p.value.Stages = append(p.value.Stages, model.StageProgress{Name: name, Input: input, AttemptsTotal: input * attemptsPerInput, State: "running"})
+	p.mu.Unlock()
+	p.send()
+}
+func (p *progressTracker) extendProbe(name string, input, attemptsPerInput int) {
+	p.mu.Lock()
+	for i := range p.value.Stages {
+		if p.value.Stages[i].Name == name {
+			p.value.Stages[i].Input += input
+			p.value.Stages[i].AttemptsTotal += input * attemptsPerInput
+			break
+		}
+	}
+	p.mu.Unlock()
+	p.send()
 }
 func (p *progressTracker) finish(name string, input, passed, failed int) {
 	p.finishAt(name, input, passed, failed, p.stageStarts[name])
 }
 func (p *progressTracker) finishAt(name string, input, passed, failed int, started time.Time) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	for i := range p.value.Stages {
 		if p.value.Stages[i].Name == name {
-			p.value.Stages[i] = model.StageProgress{Name: name, Input: input, Passed: passed, Failed: failed, DurationMS: time.Since(started).Milliseconds(), State: "completed"}
+			p.value.Stages[i].Input = input
+			p.value.Stages[i].Passed = passed
+			p.value.Stages[i].Failed = failed
+			p.value.Stages[i].DurationMS = time.Since(started).Milliseconds()
+			p.value.Stages[i].State = "completed"
 		}
 	}
-	p.sendLocked()
+	p.mu.Unlock()
+	p.send()
 }
 func (p *progressTracker) advance(name string, passed bool, failures map[model.FailureReason]int) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	for i := range p.value.Stages {
 		if p.value.Stages[i].Name != name {
 			continue
@@ -343,8 +383,25 @@ func (p *progressTracker) advance(name string, passed bool, failures map[model.F
 		p.value.Failures[reason] += count
 	}
 	p.stageUpdates[name]++
-	if p.stageUpdates[name] == 1 || time.Since(p.lastEmit) >= 100*time.Millisecond {
-		p.sendLocked()
+	firstUpdate := p.stageUpdates[name] == 1
+	p.mu.Unlock()
+	if firstUpdate {
+		p.send()
+	}
+}
+func (p *progressTracker) attempt(name string) {
+	p.mu.Lock()
+	firstAttempt := false
+	for i := range p.value.Stages {
+		if p.value.Stages[i].Name == name {
+			p.value.Stages[i].AttemptsCompleted++
+			firstAttempt = p.value.Stages[i].AttemptsCompleted == 1
+			break
+		}
+	}
+	p.mu.Unlock()
+	if firstAttempt {
+		p.send()
 	}
 }
 func (p *progressTracker) addFailures(failures map[model.FailureReason]int) {
@@ -354,30 +411,65 @@ func (p *progressTracker) addFailures(failures map[model.FailureReason]int) {
 		p.value.Failures[reason] += count
 	}
 }
-func (p *progressTracker) sendLocked() {
-	if p.emit != nil {
-		copyValue := p.value
-		copyValue.Stages = append([]model.StageProgress(nil), p.value.Stages...)
-		copyValue.Failures = map[model.FailureReason]int{}
-		for k, v := range p.value.Failures {
-			copyValue.Failures[k] = v
+func (p *progressTracker) heartbeat() {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer func() {
+		ticker.Stop()
+		close(p.done)
+	}()
+	for {
+		select {
+		case <-ticker.C:
+			p.send()
+		case <-p.stop:
+			return
 		}
-		p.emit(copyValue)
-		p.lastEmit = time.Now()
 	}
 }
-func (p *progressTracker) summary(started time.Time, results []model.ProbeResult, state string) model.RunSummary {
+func (p *progressTracker) stopHeartbeat() {
+	if p.stop == nil {
+		return
+	}
+	p.stopOnce.Do(func() {
+		close(p.stop)
+		<-p.done
+	})
+}
+func (p *progressTracker) send() {
+	if p.emit == nil {
+		return
+	}
+	p.emitMu.Lock()
+	defer p.emitMu.Unlock()
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	for i := range p.value.Stages {
+		if p.value.Stages[i].State == "running" {
+			p.value.Stages[i].DurationMS = time.Since(p.stageStarts[p.value.Stages[i].Name]).Milliseconds()
+		}
+	}
+	copyValue := p.value
+	copyValue.Stages = append([]model.StageProgress(nil), p.value.Stages...)
+	copyValue.Failures = map[model.FailureReason]int{}
+	for k, v := range p.value.Failures {
+		copyValue.Failures[k] = v
+	}
+	p.mu.Unlock()
+	p.emit(copyValue)
+}
+func (p *progressTracker) summary(started time.Time, results []model.ProbeResult, state string) model.RunSummary {
+	p.stopHeartbeat()
+	p.mu.Lock()
 	if results == nil {
 		results = []model.ProbeResult{}
 	}
 	p.value.State = state
 	p.value.Message = fmt.Sprintf("%d 个结果", len(results))
-	p.sendLocked()
+	runID := p.value.RunID
 	failures := map[model.FailureReason]int{}
 	for k, v := range p.value.Failures {
 		failures[k] = v
 	}
-	return model.RunSummary{RunID: p.value.RunID, StartedAt: started, FinishedAt: time.Now(), State: state, Results: results, Failures: failures}
+	p.mu.Unlock()
+	p.send()
+	return model.RunSummary{RunID: runID, StartedAt: started, FinishedAt: time.Now(), State: state, Results: results, Failures: failures}
 }

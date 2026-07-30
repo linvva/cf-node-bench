@@ -22,14 +22,34 @@ test("workspace remains stable through a complete run",async({page},testInfo)=>{
   await expect(page.locator('[data-slot="drawer-content"]')).not.toBeVisible();
   await page.getByLabel("复制选项").click();
   await expect(page.getByRole("checkbox",{name:"国家代码"})).toBeChecked();
+  await expect(page.getByRole("checkbox",{name:"HTTP 平均延迟"})).toBeChecked();
+  await expect(page.getByRole("checkbox",{name:"下载带宽"})).toBeChecked();
   await page.locator('[data-slot="checkbox-content"]').filter({hasText:"TCP P95"}).click();
-  await page.locator('[data-slot="checkbox-content"]').filter({hasText:"HTTP 平均延迟"}).click();
-  await page.locator('[data-slot="checkbox-content"]').filter({hasText:"下载带宽"}).click();
   await page.getByRole("button",{name:"复制结果"}).click();
-  expect(await page.evaluate(()=>(window as typeof window&{__copiedText?:string}).__copiedText?.split("\n")[0])).toBe("104.18.1.20:8443#CN\tTCP 22.0 ms\tHTTP 44.0 ms\t186.0 Mbps");
+  expect(await page.evaluate(()=>(window as typeof window&{__copiedText?:string}).__copiedText?.split("\n")[0])).toBe("104.18.1.20:8443#CN|TCP22ms|HTTP44ms|186Mbps");
   await page.screenshot({path:testInfo.outputPath("workspace.png"),fullPage:true});
   const overflow=await page.evaluate(()=>({x:document.documentElement.scrollWidth-document.documentElement.clientWidth,y:document.documentElement.scrollHeight-document.documentElement.clientHeight}));
   expect(overflow.x).toBe(0); expect(overflow.y).toBe(0);
+});
+
+test("progress stays responsive while previous results remain visible",async({page},testInfo)=>{
+  await page.goto("/");
+  await page.getByRole("button",{name:/开始测速/}).click();
+  await expect(page.getByText("104.18.1.20:8443")).toBeVisible({timeout:8000});
+
+  await page.getByRole("button",{name:/开始测速/}).click();
+  await expect(page.getByRole("button",{name:/取消测速/})).toBeVisible();
+  const tcpStage=page.locator(".stage").filter({hasText:"TCP"});
+  await expect(tcpStage.locator(".stage-time")).toContainText("探测",{timeout:4000});
+  await page.screenshot({path:testInfo.outputPath("progress.png"),fullPage:true});
+
+  const content=page.locator(".main-content");
+  await content.evaluate(element=>{element.scrollTop=element.scrollHeight;});
+  expect(await content.evaluate(element=>element.scrollTop)).toBeGreaterThan(0);
+  await page.waitForTimeout(700);
+  await content.evaluate(element=>{element.scrollTop=0;});
+  expect(await content.evaluate(element=>element.scrollTop)).toBe(0);
+  await page.getByRole("button",{name:/取消测速/}).click();
 });
 
 test("settings and sources fit without overlap",async({page},testInfo)=>{

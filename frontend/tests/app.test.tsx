@@ -25,9 +25,9 @@ describe("CF Node Bench workspace",()=>{
     fireEvent.click(screen.getByRole("button",{name:"设置"}));
     const tcp=await screen.findByLabelText("TCP 候选池");
     fireEvent.change(tcp,{target:{value:"10"}});
-    fireEvent.change(screen.getByLabelText("带宽候选池"),{target:{value:"30"}});
+    fireEvent.change(screen.getByLabelText("带宽目标通过数"),{target:{value:"30"}});
     fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
-    expect(await screen.findByText("带宽候选数不能大于 TCP 候选数")).toBeInTheDocument();
+    expect(await screen.findByText("带宽目标通过数不能大于 TCP 候选数")).toBeInTheDocument();
   });
 
   it("shows advanced probe controls and rejects conflicting country filters",async()=>{

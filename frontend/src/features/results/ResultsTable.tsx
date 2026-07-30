@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Button, Checkbox, Drawer, Input, Popover, Table, toast } from "@heroui/react";
 import { Clipboard, Download, Search, SlidersHorizontal, X } from "lucide-react";
 import type { ProbeResult, RunSummary } from "../../types";
@@ -6,23 +6,24 @@ import type { ProbeResult, RunSummary } from "../../types";
 type SortKey = "score" | "tcp" | "https" | "bandwidth";
 export interface CopyFields { country: boolean; tcpLatency: boolean; httpLatency: boolean; bandwidth: boolean }
 
-const defaultCopyFields: CopyFields = { country: true, tcpLatency: false, httpLatency: false, bandwidth: false };
+const defaultCopyFields: CopyFields = { country: true, tcpLatency: false, httpLatency: true, bandwidth: true };
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 const ms = (value: number) => `${value.toFixed(1)} ms`;
 const keyOf = (item: ProbeResult) => `${item.candidate.ip}:${item.candidate.port}`;
+const compactNumber = (value: number) => value.toFixed(1).replace(/\.0$/, "");
 
 export function formatCopyResults(results: ProbeResult[], fields: CopyFields) {
   return results.map((item) => {
     const country = fields.country && item.candidate.country ? `#${item.candidate.country}` : "";
     const values = [`${keyOf(item)}${country}`];
-    if (fields.tcpLatency) values.push(`TCP ${item.tcp.p95Ms.toFixed(1)} ms`);
-    if (fields.httpLatency) values.push(`HTTP ${item.https.averageMs.toFixed(1)} ms`);
-    if (fields.bandwidth) values.push(`${item.bandwidth.mbps.toFixed(1)} Mbps`);
-    return values.join("\t");
+    if (fields.tcpLatency) values.push(`TCP${compactNumber(item.tcp.p95Ms)}ms`);
+    if (fields.httpLatency) values.push(`HTTP${compactNumber(item.https.averageMs)}ms`);
+    if (fields.bandwidth) values.push(`${compactNumber(item.bandwidth.mbps)}Mbps`);
+    return values.join("|");
   }).join("\n");
 }
 
-export function ResultsTable({ summary }: { summary?: RunSummary }) {
+export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: RunSummary }) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("score");
   const [selected, setSelected] = useState<ProbeResult>();
@@ -81,7 +82,7 @@ export function ResultsTable({ summary }: { summary?: RunSummary }) {
       <div className="score-breakdown"><h3>评分明细 · {selected.score.toFixed(1)}</h3>{Object.entries({ TCP: selected.parts.tcp, HTTPS: selected.parts.https, 抖动: selected.parts.jitter, 可用性: selected.parts.reliability, 带宽: selected.parts.bandwidth }).map(([label, value]) => <div className="score-row" key={label}><span>{label}</span><div className="score-track"><div className="score-fill" style={{ width: `${value}%` }} /></div><b>{value.toFixed(0)}</b></div>)}</div>
     </Drawer.Body></Drawer.Dialog></Drawer.Content></Drawer.Backdrop></Drawer>}
   </section>;
-}
+});
 
 function Metric({ label, value }: { label: string; value: string }) {
   return <div className="drawer-metric"><label>{label}</label><strong>{value}</strong></div>;

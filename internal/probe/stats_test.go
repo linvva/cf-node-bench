@@ -40,9 +40,13 @@ func TestHTTPSAndBandwidthWithVerifiedTLS(t *testing.T) {
 	}))
 	defer server.Close()
 	candidate := candidateFor(t, server.Listener.Addr())
-	httpsStats := (HTTPSProber{ConnectTimeout: time.Second, RequestTimeout: time.Second, RootCAs: roots}).Probe(t.Context(), candidate, 3)
+	attemptsCompleted := 0
+	httpsStats := (HTTPSProber{ConnectTimeout: time.Second, RequestTimeout: time.Second, RootCAs: roots}).Probe(t.Context(), candidate, 3, func() { attemptsCompleted++ })
 	if httpsStats.Successes != 3 {
 		t.Fatalf("HTTPS stats: %+v", httpsStats)
+	}
+	if attemptsCompleted != 3 {
+		t.Fatalf("attempt progress = %d", attemptsCompleted)
 	}
 	band := (BandwidthProber{ConnectTimeout: time.Second, TotalTimeout: time.Second, MaxBytes: 128 * 1024, RootCAs: roots, Path: "/__down"}).Probe(t.Context(), candidate)
 	if band.Bytes != 128*1024 || band.Mbps <= 0 || band.Failure != "" {
@@ -64,7 +68,7 @@ func TestHTTPSClassifiesTimeout(t *testing.T) {
 		_, _ = w.Write([]byte("late"))
 	}))
 	defer server.Close()
-	stats := (HTTPSProber{ConnectTimeout: time.Second, RequestTimeout: 20 * time.Millisecond, RootCAs: roots}).Probe(t.Context(), candidateFor(t, server.Listener.Addr()), 1)
+	stats := (HTTPSProber{ConnectTimeout: time.Second, RequestTimeout: 20 * time.Millisecond, RootCAs: roots}).Probe(t.Context(), candidateFor(t, server.Listener.Addr()), 1, nil)
 	if stats.Failures[model.FailureTimeout] != 1 {
 		t.Fatalf("failures: %+v", stats.Failures)
 	}

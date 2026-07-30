@@ -13,13 +13,13 @@ const result: ProbeResult = {
 };
 
 describe("formatCopyResults", () => {
-  it("copies nodes in IP:PORT#country format", () => {
-    const fields: CopyFields = { country: true, tcpLatency: false, httpLatency: false, bandwidth: false };
-    expect(formatCopyResults([result], fields)).toBe("104.18.1.20:8443#CN");
+  it("copies nodes and default metrics without tabs", () => {
+    const fields: CopyFields = { country: true, tcpLatency: false, httpLatency: true, bandwidth: true };
+    expect(formatCopyResults([result], fields)).toBe("104.18.1.20:8443#CN|HTTP44ms|186Mbps");
   });
 
   it("appends selected metrics with units", () => {
     const fields: CopyFields = { country: false, tcpLatency: true, httpLatency: true, bandwidth: true };
-    expect(formatCopyResults([result], fields)).toBe("104.18.1.20:8443\tTCP 22.0 ms\tHTTP 44.0 ms\t186.0 Mbps");
+    expect(formatCopyResults([result], fields)).toBe("104.18.1.20:8443|TCP22ms|HTTP44ms|186Mbps");
   });
 });

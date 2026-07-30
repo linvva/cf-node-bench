@@ -86,12 +86,14 @@ type ProbeResult struct {
 }
 
 type StageProgress struct {
-	Name       string `json:"name"`
-	Input      int    `json:"input"`
-	Passed     int    `json:"passed"`
-	Failed     int    `json:"failed"`
-	DurationMS int64  `json:"durationMs"`
-	State      string `json:"state"`
+	Name              string `json:"name"`
+	Input             int    `json:"input"`
+	Passed            int    `json:"passed"`
+	Failed            int    `json:"failed"`
+	AttemptsCompleted int    `json:"attemptsCompleted,omitempty"`
+	AttemptsTotal     int    `json:"attemptsTotal,omitempty"`
+	DurationMS        int64  `json:"durationMs"`
+	State             string `json:"state"`
 }
 
 type RunProgress struct {

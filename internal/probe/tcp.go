@@ -11,7 +11,7 @@ import (
 
 type TCPProber struct{ Timeout time.Duration }
 
-func (p TCPProber) Probe(ctx context.Context, candidate model.Candidate, attempts int) model.ProbeStats {
+func (p TCPProber) Probe(ctx context.Context, candidate model.Candidate, attempts int, onAttempt func()) model.ProbeStats {
 	samples := make([]float64, 0, attempts)
 	failures := map[model.FailureReason]int{}
 	dialer := net.Dialer{Timeout: p.Timeout}
@@ -21,6 +21,9 @@ func (p TCPProber) Probe(ctx context.Context, candidate model.Candidate, attempt
 		conn, err := dialer.DialContext(ctx, "tcp", address)
 		if err != nil {
 			failures[classify(ctx, err)]++
+			if onAttempt != nil {
+				onAttempt()
+			}
 			if ctx.Err() != nil {
 				break
 			}
@@ -28,6 +31,9 @@ func (p TCPProber) Probe(ctx context.Context, candidate model.Candidate, attempt
 		}
 		samples = append(samples, float64(time.Since(started).Microseconds())/1000)
 		_ = conn.Close()
+		if onAttempt != nil {
+			onAttempt()
+		}
 	}
 	return Summarize(attempts, samples, failures)
 }

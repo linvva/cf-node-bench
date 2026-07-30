@@ -87,9 +87,9 @@ function mockPlan(): StageProgress[] {
   return [
     {name:"source",input:mockData.sources.filter(source=>source.enabled).length,passed:mockData.sources.filter(source=>source.enabled).length,failed:0,durationMs:180,state:"completed"},
     {name:"filter",input:mockCandidates.length+2,passed:filtered.length,failed:2+portFailed+countryFailed,durationMs:24,state:"completed"},
-    {name:"tcp",input:filtered.length,passed:tcpPassed,failed:tcpFailed,durationMs:1480,state:"completed"},
-    {name:"https",input:httpsInput,passed:httpsPassed,failed:httpsFailed,durationMs:1760,state:"completed"},
-    {name:"bandwidth",input:bandwidthInput,passed:bandwidthInput-bandwidthFailed,failed:bandwidthFailed,durationMs:1930,state:"completed"},
+    {name:"tcp",input:filtered.length,passed:tcpPassed,failed:tcpFailed,attemptsCompleted:filtered.length*settings.tcpProbeCount,attemptsTotal:filtered.length*settings.tcpProbeCount,durationMs:1480,state:"completed"},
+    {name:"https",input:httpsInput,passed:httpsPassed,failed:httpsFailed,attemptsCompleted:httpsInput*settings.httpsProbeCount,attemptsTotal:httpsInput*settings.httpsProbeCount,durationMs:1760,state:"completed"},
+    {name:"bandwidth",input:bandwidthInput,passed:bandwidthInput-bandwidthFailed,failed:bandwidthFailed,attemptsCompleted:bandwidthInput,attemptsTotal:bandwidthInput,durationMs:1930,state:"completed"},
     {name:"ranking",input:bandwidthInput,passed:rankingPassed,failed:bandwidthInput-rankingPassed,durationMs:28,state:"completed"},
   ];
 }
@@ -122,7 +122,7 @@ export const bridge = {
   async startRun() {
     if(window.go?.main?.App) return window.go.main.App.StartRun();
     mockCancelled=false; mockRunId=`run-${Date.now()}`; mockStartedAt=new Date().toISOString(); mockCompleted=0; const plan=mockPlan(); let step=0;
-    mockTimer=window.setInterval(()=>{ const completed=Math.min(step,plan.length); mockCompleted=completed; const stages=completed===plan.length?plan:plan.slice(0,completed+1).map((stage,index)=>index<completed?stage:{...stage,passed:0,failed:0,durationMs:0,state:"running"}); progressHandlers.forEach(h=>h({runId:mockRunId,state:"running",startedAt:mockStartedAt,stages,failures:mockFailures(plan,completed)})); if(completed===plan.length){ window.clearInterval(mockTimer); const summary=mockResults(); mockData.history=[summary,...mockData.history]; completeHandlers.forEach(h=>h(summary)); } step++; },520); return mockRunId;
+    mockTimer=window.setInterval(()=>{ const completed=Math.min(step,plan.length); mockCompleted=completed; const stages=completed===plan.length?plan:plan.slice(0,completed+1).map((stage,index)=>index<completed?stage:{...stage,passed:0,failed:0,attemptsCompleted:0,durationMs:0,state:"running"}); progressHandlers.forEach(h=>h({runId:mockRunId,state:"running",startedAt:mockStartedAt,stages,failures:mockFailures(plan,completed)})); if(completed===plan.length){ window.clearInterval(mockTimer); const summary=mockResults(); mockData.history=[summary,...mockData.history]; completeHandlers.forEach(h=>h(summary)); } step++; },520); return mockRunId;
   },
   async cancelRun(){ if(window.go?.main?.App) return window.go.main.App.CancelRun(); mockCancelled=true; window.clearInterval(mockTimer); const summary=mockResults(mockRunId,mockStartedAt,mockCompleted); completeHandlers.forEach(h=>h(summary)); return true; },
   onProgress(handler:Handler<RunProgress>){ progressHandlers.add(handler); const off=window.runtime?.EventsOn("run:progress",value=>handler(normalizeProgress(value as RunProgress))); return ()=>{progressHandlers.delete(handler); off?.();}; },

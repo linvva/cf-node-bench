@@ -24,7 +24,7 @@ type HTTPSProber struct {
 	Path           string
 }
 
-func (p HTTPSProber) Probe(ctx context.Context, candidate model.Candidate, attempts int) model.ProbeStats {
+func (p HTTPSProber) Probe(ctx context.Context, candidate model.Candidate, attempts int, onAttempt func()) model.ProbeStats {
 	samples := make([]float64, 0, attempts)
 	failures := map[model.FailureReason]int{}
 	client := p.client(candidate)
@@ -41,6 +41,9 @@ func (p HTTPSProber) Probe(ctx context.Context, candidate model.Candidate, attem
 		if err != nil {
 			failures[classify(attemptCtx, err)]++
 			cancel()
+			if onAttempt != nil {
+				onAttempt()
+			}
 			if ctx.Err() != nil {
 				break
 			}
@@ -56,6 +59,9 @@ func (p HTTPSProber) Probe(ctx context.Context, candidate model.Candidate, attem
 			samples = append(samples, float64(time.Since(started).Microseconds())/1000)
 		}
 		cancel()
+		if onAttempt != nil {
+			onAttempt()
+		}
 	}
 	return Summarize(attempts, samples, failures)
 }

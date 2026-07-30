@@ -22,7 +22,7 @@ const constraints: Record<IntegerSetting, [number, number, string]> = {
   tcpProbeCount: [1, 10, "TCP 探测次数"],
   httpsProbeCount: [1, 10, "HTTPS 探测次数"],
   tcpCandidateCount: [1, 5000, "TCP 候选数"],
-  bandwidthCandidates: [1, 500, "带宽候选数"],
+  bandwidthCandidates: [1, 500, "带宽目标通过数"],
   finalResultCount: [1, 100, "最终结果数"],
 };
 
@@ -53,7 +53,7 @@ export function SettingsPage() {
         </SettingsSection>
         <SettingsSection title="候选池与过滤" description="空白过滤列表表示不限；排除国家的优先级高于允许国家。">
           <Field label="TCP 候选池" value={form.tcpCandidateCount} min={1} max={5000} onChange={(value) => number("tcpCandidateCount", value)} />
-          <Field label="带宽候选池" value={form.bandwidthCandidates} min={1} max={500} onChange={(value) => number("bandwidthCandidates", value)} />
+          <Field label="带宽目标通过数" value={form.bandwidthCandidates} min={1} max={500} onChange={(value) => number("bandwidthCandidates", value)} />
           <Field label="最终结果数" value={form.finalResultCount} min={1} max={100} onChange={(value) => number("finalResultCount", value)} />
           <MiBField value={form.maxDownloadBytes} onChange={(value) => setForm((current) => ({ ...current, maxDownloadBytes: value }))} />
           <div className="field field-wide"><label>允许端口</label><Input aria-label="允许端口" value={form.allowedPorts.join(", ")} onChange={(event) => setForm((current) => ({ ...current, allowedPorts: event.target.value.split(/[,\s]+/).filter(Boolean).map(Number) }))} /><small>逗号分隔；留空表示不限</small></div>
@@ -89,8 +89,8 @@ export function validateSettings(form: Settings) {
     if (form.tcpMinSuccessRate < 0.6 || form.tcpMinSuccessRate > 1) return "TCP 最低成功率必须在 60% 到 100% 之间";
     if (form.httpsMinSuccessRate < 0.6 || form.httpsMinSuccessRate > 1) return "HTTPS 最低成功率必须在 60% 到 100% 之间";
     if (form.maxDownloadBytes < 1048576 || form.maxDownloadBytes > 1073741824) return "最大下载量必须在 1 到 1024 MiB 之间";
-    if (form.bandwidthCandidates > form.tcpCandidateCount) return "带宽候选数不能大于 TCP 候选数";
-    if (form.finalResultCount > form.bandwidthCandidates) return "最终结果数不能大于带宽候选数";
+    if (form.bandwidthCandidates > form.tcpCandidateCount) return "带宽目标通过数不能大于 TCP 候选数";
+    if (form.finalResultCount > form.bandwidthCandidates) return "最终结果数不能大于带宽目标通过数";
     if (form.allowedPorts.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) return "端口必须在 1 到 65535 之间";
     if ([...form.allowedCountries, ...form.blockedCountries].some((country) => !/^[A-Z]{2}$/.test(country))) return "国家代码必须是两个大写字母";
     const blocked = new Set(form.blockedCountries);

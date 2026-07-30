@@ -63,7 +63,7 @@ func (s Settings) Validate() error {
 		{"数据源超时", s.SourceTimeoutMS, 500, 60000}, {"数据源重试次数", s.SourceRetries, 0, 3},
 		{"TCP 探测次数", s.TCPProbeCount, 1, 10}, {"HTTPS 探测次数", s.HTTPSProbeCount, 1, 10},
 		{"TCP 候选数", s.TCPCandidateCount, 1, 5000},
-		{"带宽候选数", s.BandwidthCandidates, 1, 500}, {"最终结果数", s.FinalResultCount, 1, 100},
+		{"带宽目标通过数", s.BandwidthCandidates, 1, 500}, {"最终结果数", s.FinalResultCount, 1, 100},
 	}
 	for _, check := range checks {
 		if check.value < check.min || check.value > check.max {
@@ -80,10 +80,10 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("HTTPS 最低成功率必须在 60%% 到 100%% 之间")
 	}
 	if s.BandwidthCandidates > s.TCPCandidateCount {
-		return fmt.Errorf("带宽候选数不能大于 TCP 候选数")
+		return fmt.Errorf("带宽目标通过数不能大于 TCP 候选数")
 	}
 	if s.FinalResultCount > s.BandwidthCandidates {
-		return fmt.Errorf("最终结果数不能大于带宽候选数")
+		return fmt.Errorf("最终结果数不能大于带宽目标通过数")
 	}
 	for _, port := range s.AllowedPorts {
 		if port < 1 || port > 65535 {
