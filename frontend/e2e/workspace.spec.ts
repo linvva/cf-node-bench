@@ -10,6 +10,9 @@ test("workspace remains stable through a complete run",async({page},testInfo)=>{
   const before=await stage.boundingBox();
   await page.getByRole("button",{name:/开始测速/}).click();
   await expect(page.getByRole("button",{name:/取消测速/})).toBeVisible();
+  await expect(page.getByLabel("当前测速进度")).toContainText("进行中");
+  await expect(page.getByRole("progressbar")).toBeVisible();
+  await expect(page.getByLabel("候选漏斗")).toBeVisible();
   const during=await stage.boundingBox();
   expect(during?.height).toBe(before?.height);
   await expect(page.getByText("104.18.1.20:8443")).toBeVisible({timeout:8000});
@@ -180,7 +183,7 @@ test("blocked countries change filter totals and results",async({page})=>{
   await page.getByRole("button",{name:/开始测速/}).click();
   const filterStage=page.locator(".stage").filter({hasText:"解析 / 过滤"});
   await expect(filterStage).toHaveAttribute("data-state","completed",{timeout:8000});
-  expect(await filterStage.locator(".stage-metrics strong").allTextContents()).toEqual(["50","40","10"]);
+  await expect(filterStage.locator(".stage-copy small")).toHaveText("40 通过 · 10 失败");
   await expect(page.getByText("104.18.1.21:443")).toBeVisible({timeout:8000});
   await expect(page.locator(".table__cell").filter({hasText:/^CN$/})).toHaveCount(0);
 });

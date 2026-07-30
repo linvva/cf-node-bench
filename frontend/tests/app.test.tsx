@@ -15,11 +15,14 @@ describe("CF Node Bench workspace",()=>{
     await screen.findByRole("heading",{name:"测速工作台"});
     fireEvent.click(screen.getByRole("button",{name:/开始测速/}));
     expect(screen.getByLabelText("测速阶段").children[0]).toHaveAttribute("data-state","running");
+    expect(screen.getByLabelText("当前测速进度")).toHaveTextContent("获取数据源进行中");
+    expect(screen.getByRole("progressbar",{name:"数据源进度"})).toBeInTheDocument();
+    expect(screen.getByLabelText("候选漏斗")).toBeInTheDocument();
     expect(await screen.findByRole("button",{name:/取消测速/})).toBeInTheDocument();
     expect(screen.getByLabelText("测速阶段").children).toHaveLength(6);
     fireEvent.click(screen.getByRole("button",{name:/取消测速/}));
     await waitFor(()=>expect(screen.getByRole("button",{name:/开始测速/})).toBeInTheDocument());
-    expect(screen.getByText("测速已取消")).toBeInTheDocument();
+    expect(screen.getByRole("heading",{name:"测速已取消"})).toBeInTheDocument();
   });
 
   it("shows a clear settings relationship error",async()=>{

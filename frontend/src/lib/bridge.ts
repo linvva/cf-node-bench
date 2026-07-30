@@ -106,6 +106,18 @@ function mockPlan(): StageProgress[] {
   ];
 }
 
+function mockRunningStage(stage: StageProgress): StageProgress {
+  const ratio=0.42;
+  return {
+    ...stage,
+    passed:Math.floor(stage.passed*ratio),
+    failed:Math.floor(stage.failed*ratio),
+    attemptsCompleted:stage.attemptsTotal?Math.max(1,Math.floor(stage.attemptsTotal*ratio)):undefined,
+    durationMs:Math.max(80,Math.floor(stage.durationMs*ratio)),
+    state:"running",
+  };
+}
+
 function mockFailures(plan: StageProgress[], completed: number): Partial<Record<FailureReason,number>> {
   const failures:Partial<Record<FailureReason,number>>={};
   if(completed>1){ failures.invalid_ip=2; const portFiltered=plan[1].input-2-mockCandidates.filter(candidate=>mockData.settings.allowedPorts.length===0||mockData.settings.allowedPorts.includes(candidate.port)).length; if(portFiltered)failures.port_filtered=portFiltered; const countryFiltered=plan[1].failed-2-portFiltered; if(countryFiltered)failures.country_filtered=countryFiltered; }
@@ -178,7 +190,7 @@ export const bridge = {
   async startRun() {
     if(window.go?.main?.App) return window.go.main.App.StartRun();
     mockCancelled=false; mockRunId=`run-${Date.now()}`; mockStartedAt=new Date().toISOString(); mockCompleted=0; const plan=mockPlan(); let step=0;
-    mockTimer=window.setInterval(()=>{ const completed=Math.min(step,plan.length); mockCompleted=completed; const stages=completed===plan.length?plan:plan.slice(0,completed+1).map((stage,index)=>index<completed?stage:{...stage,passed:0,failed:0,attemptsCompleted:0,durationMs:0,state:"running"}); progressHandlers.forEach(h=>h({runId:mockRunId,state:"running",startedAt:mockStartedAt,stages,failures:mockFailures(plan,completed)})); if(completed===plan.length){ window.clearInterval(mockTimer); const summary=mockResults(); mockData.history=[summary,...mockData.history]; completeHandlers.forEach(h=>h(summary)); if(summary.state==="completed")void bridge.publishRun(summary.runId,"all"); } step++; },520); return mockRunId;
+    mockTimer=window.setInterval(()=>{ const completed=Math.min(step,plan.length); mockCompleted=completed; const stages=completed===plan.length?plan:plan.slice(0,completed+1).map((stage,index)=>index<completed?stage:mockRunningStage(stage)); progressHandlers.forEach(h=>h({runId:mockRunId,state:"running",startedAt:mockStartedAt,stages,failures:mockFailures(plan,completed)})); if(completed===plan.length){ window.clearInterval(mockTimer); const summary=mockResults(); mockData.history=[summary,...mockData.history]; completeHandlers.forEach(h=>h(summary)); if(summary.state==="completed")void bridge.publishRun(summary.runId,"all"); } step++; },520); return mockRunId;
   },
   async cancelRun(){ if(window.go?.main?.App) return window.go.main.App.CancelRun(); mockCancelled=true; window.clearInterval(mockTimer); const summary=mockResults(mockRunId,mockStartedAt,mockCompleted); completeHandlers.forEach(h=>h(summary)); return true; },
   onProgress(handler:Handler<RunProgress>){ progressHandlers.add(handler); const off=window.runtime?.EventsOn("run:progress",value=>handler(normalizeProgress(value as RunProgress))); return ()=>{progressHandlers.delete(handler); off?.();}; },
