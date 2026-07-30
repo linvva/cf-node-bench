@@ -106,10 +106,23 @@ type RunProgress struct {
 }
 
 type RunSummary struct {
-	RunID      string                `json:"runId"`
-	StartedAt  time.Time             `json:"startedAt"`
-	FinishedAt time.Time             `json:"finishedAt"`
-	State      string                `json:"state"`
-	Results    []ProbeResult         `json:"results"`
-	Failures   map[FailureReason]int `json:"failures"`
+	RunID        string                `json:"runId"`
+	StartedAt    time.Time             `json:"startedAt"`
+	FinishedAt   time.Time             `json:"finishedAt"`
+	State        string                `json:"state"`
+	Results      []ProbeResult         `json:"results"`
+	Failures     map[FailureReason]int `json:"failures"`
+	Publications []PublicationResult   `json:"publications"`
+}
+
+type PublicationResult struct {
+	Target     string    `json:"target"`
+	State      string    `json:"state"`
+	Items      int       `json:"items"`
+	Eligible   int       `json:"eligible,omitempty"`
+	Skipped    int       `json:"skipped,omitempty"`
+	RecordType string    `json:"recordType,omitempty"`
+	Message    string    `json:"message,omitempty"`
+	StartedAt  time.Time `json:"startedAt"`
+	FinishedAt time.Time `json:"finishedAt,omitempty"`
 }

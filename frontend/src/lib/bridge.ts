@@ -1,16 +1,17 @@
-import type { Bootstrap, FailureReason, HTTPSource, RunProgress, RunSummary, Settings, StageProgress } from "../types";
+import type { Bootstrap, FailureReason, HTTPSource, PublicationResult, PublicationUpdate, PublishSaveRequest, PublishSettingsView, PublishTarget, RunProgress, RunSummary, Settings, StageProgress } from "../types";
 
 type Handler<T> = (value: T) => void;
 
 declare global {
   interface Window {
-    go?: { main?: { App?: { Bootstrap(): Promise<Bootstrap>; SaveSettings(value: Settings): Promise<void>; SaveSources(value: HTTPSource[]): Promise<void>; StartRun(): Promise<string>; CancelRun(): Promise<boolean> } } };
+    go?: { main?: { App?: { Bootstrap(): Promise<Bootstrap>; SaveSettings(value: Settings): Promise<void>; SaveSources(value: HTTPSource[]): Promise<void>; SavePublishSettings(value: PublishSaveRequest): Promise<PublishSettingsView>; ClearPublishCredential(target: PublishTarget): Promise<PublishSettingsView>; TestPublishTarget(target: PublishTarget, value: PublishSaveRequest): Promise<void>; PublishRun(runId: string, target: "all" | PublishTarget): Promise<void>; StartRun(): Promise<string>; CancelRun(): Promise<boolean> } } };
     runtime?: { EventsOn(name: string, handler: Handler<unknown>): () => void };
   }
 }
 
 const progressHandlers = new Set<Handler<RunProgress>>();
 const completeHandlers = new Set<Handler<RunSummary>>();
+const publishHandlers = new Set<Handler<PublicationUpdate>>();
 let mockTimer: number | undefined;
 let mockCancelled = false;
 let mockRunId = "";
@@ -18,12 +19,20 @@ let mockStartedAt = "";
 let mockCompleted = 0;
 
 const defaultSettings: Settings = { tcpConcurrency:64, httpsConcurrency:16, bandwidthConcurrency:3, connectTimeoutMs:1200, requestTimeoutMs:4000, bandwidthTimeoutMs:12000, sourceTimeoutMs:10000, sourceRetries:2, tcpProbeCount:3, httpsProbeCount:3, tcpMinSuccessRate:2/3, httpsMinSuccessRate:2/3, tcpCandidateCount:150, bandwidthCandidates:30, finalResultCount:15, maxDownloadBytes:20971520, allowedPorts:[443,8443,2053,2083,2087,2096], allowedCountries:[], blockedCountries:[] };
+export const defaultPublishSettings: PublishSettingsView = {
+  output:{country:true,tcpP95:false,httpLatency:true,bandwidth:true},
+  request:{timeoutMs:10000,maxRetries:2,retryDelayMs:1000},
+  cloudflare:{enabled:false,tokenConfigured:false,zoneId:"",recordName:"",recordType:"A",ttl:60,proxied:false},
+  github:{enabled:false,tokenConfigured:false,owner:"",repository:"",branch:"main",path:"ip.txt"},
+  telegram:{enabled:false,tokenConfigured:false,chatId:"",contentMode:"summary"},
+};
 
 export function normalizeSummary(value: RunSummary): RunSummary {
   return {
     ...value,
     results: Array.isArray(value?.results) ? value.results : [],
     failures: value?.failures ?? {},
+    publications: Array.isArray(value?.publications) ? value.publications : [],
   };
 }
 
@@ -49,6 +58,7 @@ export function normalizeBootstrap(value: Bootstrap): Bootstrap {
       allowedCountries: Array.isArray(settings.allowedCountries) ? settings.allowedCountries : [],
       blockedCountries: Array.isArray(settings.blockedCountries) ? settings.blockedCountries : [],
     },
+    publishSettings: normalizePublishSettings(value?.publishSettings),
     sources: Array.isArray(value?.sources) ? value.sources : [],
     history: Array.isArray(value?.history) ? value.history.map(normalizeSummary) : [],
     network: value?.network ?? {interface:"",ipv4:"",status:"unavailable"},
@@ -57,6 +67,7 @@ export function normalizeBootstrap(value: Bootstrap): Bootstrap {
 
 let mockData: Bootstrap = {
   settings: defaultSettings,
+  publishSettings: structuredClone(defaultPublishSettings),
   sources: [
     {id:"example-community-1",name:"社区示例源 A",url:"https://raw.githubusercontent.com/ymyuuu/IPDB/main/BestCF/bestcfv4.txt",enabled:true,lastStatus:"浏览器预览数据",nodeCount:48},
     {id:"example-community-2",name:"社区示例源 B",url:"https://ip.164746.xyz/ipTop10.html",enabled:false,lastStatus:"未获取",nodeCount:0},
@@ -112,19 +123,58 @@ function mockResults(runId=mockRunId, startedAt=mockStartedAt, completed=mockPla
     bandwidth:{bytes:20971520,ttfbMs:39+index*2,durationMs:900+index*85,mbps:186-index*8.5},
     score:96.2-index*3.7,parts:{tcp:98-index*2,https:96-index*2.4,jitter:94-index*2,reliability:index===8?83:100,bandwidth:100-index*5},status:"qualified",
   }));
-  const now=new Date(); return {runId,startedAt:startedAt||now.toISOString(),finishedAt:now.toISOString(),state:mockCancelled?"cancelled":"completed",results:mockCancelled?[]:results,failures:mockFailures(plan,completed)};
+  const now=new Date(); return {runId,startedAt:startedAt||now.toISOString(),finishedAt:now.toISOString(),state:mockCancelled?"cancelled":"completed",results:mockCancelled?[]:results,failures:mockFailures(plan,completed),publications:[]};
+}
+
+function normalizePublishSettings(value?:PublishSettingsView):PublishSettingsView {
+  return {
+    output:{...defaultPublishSettings.output,...value?.output},
+    request:{...defaultPublishSettings.request,...value?.request},
+    cloudflare:{...defaultPublishSettings.cloudflare,...value?.cloudflare,recordType:value?.cloudflare?.recordType||"A"},
+    github:{...defaultPublishSettings.github,...value?.github},
+    telegram:{...defaultPublishSettings.telegram,...value?.telegram,contentMode:value?.telegram?.contentMode||"summary"},
+  };
+}
+
+function mockPublication(update:PublicationUpdate){
+  mockData.history=mockData.history.map(summary=>summary.runId===update.runId?{...summary,publications:[...summary.publications.filter(value=>value.target!==update.result.target),update.result]}:summary);
+  publishHandlers.forEach(handler=>handler(update));
 }
 
 export const bridge = {
   async bootstrap(): Promise<Bootstrap> { const value=window.go?.main?.App ? await window.go.main.App.Bootstrap() : structuredClone(mockData); return normalizeBootstrap(value); },
   async saveSettings(value: Settings) { if(window.go?.main?.App) return window.go.main.App.SaveSettings(value); mockData.settings=structuredClone(value); },
   async saveSources(value: HTTPSource[]) { if(window.go?.main?.App) return window.go.main.App.SaveSources(value); mockData.sources=structuredClone(value); },
+  async savePublishSettings(value: PublishSaveRequest) {
+    if(window.go?.main?.App) return window.go.main.App.SavePublishSettings(value);
+    const current=mockData.publishSettings;
+    mockData.publishSettings={...structuredClone(value.settings),cloudflare:{...value.settings.cloudflare,tokenConfigured:current.cloudflare.tokenConfigured||Boolean(value.cloudflareToken.trim())},github:{...value.settings.github,tokenConfigured:current.github.tokenConfigured||Boolean(value.githubToken.trim())},telegram:{...value.settings.telegram,tokenConfigured:current.telegram.tokenConfigured||Boolean(value.telegramBotToken.trim())}};
+    return structuredClone(mockData.publishSettings);
+  },
+  async clearPublishCredential(target: PublishTarget) {
+    if(window.go?.main?.App) return window.go.main.App.ClearPublishCredential(target);
+    mockData.publishSettings={...mockData.publishSettings,[target]:{...mockData.publishSettings[target],enabled:false,tokenConfigured:false}};
+    return structuredClone(mockData.publishSettings);
+  },
+  async testPublishTarget(target: PublishTarget,value:PublishSaveRequest) { if(window.go?.main?.App) return window.go.main.App.TestPublishTarget(target,value); },
+  async publishRun(runId:string,target:"all"|PublishTarget) {
+    if(window.go?.main?.App) return window.go.main.App.PublishRun(runId,target);
+    const summary=mockData.history.find(item=>item.runId===runId);
+    if(!summary||summary.state!=="completed") throw new Error("只有已完成的测速可以发布");
+    const targets:PublishTarget[]=target==="all"?(["cloudflare","github","telegram"] as PublishTarget[]).filter(current=>mockData.publishSettings[current].enabled):[target];
+    for(const current of targets) mockPublication({runId,result:{target:current,state:"queued",items:0}});
+    window.setTimeout(()=>{
+      const now=new Date().toISOString();
+      for(const current of targets) mockPublication({runId,result:{target:current,state:"succeeded",items:summary.results.length,recordType:current==="cloudflare"?mockData.publishSettings.cloudflare.recordType:undefined,message:current==="cloudflare"?`已写入 ${summary.results.length} 条记录`:"发布成功",startedAt:now,finishedAt:now}});
+    },180);
+  },
   async startRun() {
     if(window.go?.main?.App) return window.go.main.App.StartRun();
     mockCancelled=false; mockRunId=`run-${Date.now()}`; mockStartedAt=new Date().toISOString(); mockCompleted=0; const plan=mockPlan(); let step=0;
-    mockTimer=window.setInterval(()=>{ const completed=Math.min(step,plan.length); mockCompleted=completed; const stages=completed===plan.length?plan:plan.slice(0,completed+1).map((stage,index)=>index<completed?stage:{...stage,passed:0,failed:0,attemptsCompleted:0,durationMs:0,state:"running"}); progressHandlers.forEach(h=>h({runId:mockRunId,state:"running",startedAt:mockStartedAt,stages,failures:mockFailures(plan,completed)})); if(completed===plan.length){ window.clearInterval(mockTimer); const summary=mockResults(); mockData.history=[summary,...mockData.history]; completeHandlers.forEach(h=>h(summary)); } step++; },520); return mockRunId;
+    mockTimer=window.setInterval(()=>{ const completed=Math.min(step,plan.length); mockCompleted=completed; const stages=completed===plan.length?plan:plan.slice(0,completed+1).map((stage,index)=>index<completed?stage:{...stage,passed:0,failed:0,attemptsCompleted:0,durationMs:0,state:"running"}); progressHandlers.forEach(h=>h({runId:mockRunId,state:"running",startedAt:mockStartedAt,stages,failures:mockFailures(plan,completed)})); if(completed===plan.length){ window.clearInterval(mockTimer); const summary=mockResults(); mockData.history=[summary,...mockData.history]; completeHandlers.forEach(h=>h(summary)); if(summary.state==="completed")void bridge.publishRun(summary.runId,"all"); } step++; },520); return mockRunId;
   },
   async cancelRun(){ if(window.go?.main?.App) return window.go.main.App.CancelRun(); mockCancelled=true; window.clearInterval(mockTimer); const summary=mockResults(mockRunId,mockStartedAt,mockCompleted); completeHandlers.forEach(h=>h(summary)); return true; },
   onProgress(handler:Handler<RunProgress>){ progressHandlers.add(handler); const off=window.runtime?.EventsOn("run:progress",value=>handler(normalizeProgress(value as RunProgress))); return ()=>{progressHandlers.delete(handler); off?.();}; },
   onComplete(handler:Handler<RunSummary>){ completeHandlers.add(handler); const off=window.runtime?.EventsOn("run:complete",value=>handler(normalizeSummary(value as RunSummary))); return ()=>{completeHandlers.delete(handler); off?.();}; },
+  onPublish(handler:Handler<PublicationUpdate>){ publishHandlers.add(handler); const off=window.runtime?.EventsOn("publish:progress",value=>handler(value as PublicationUpdate)); return ()=>{publishHandlers.delete(handler); off?.();}; },
 };

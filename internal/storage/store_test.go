@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/linvva/cf-node-bench/internal/model"
+	"github.com/linvva/cf-node-bench/internal/publish"
 	"github.com/linvva/cf-node-bench/internal/source"
 )
 
@@ -38,7 +40,7 @@ func TestOpenNormalizesLegacyNullCollections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store.Settings().AllowedCountries == nil || store.Sources() == nil || store.History()[0].Results == nil {
+	if store.Settings().AllowedCountries == nil || store.Sources() == nil || store.History()[0].Results == nil || store.History()[0].Publications == nil {
 		t.Fatal("legacy null collections were not normalized")
 	}
 	settings := store.Settings()
@@ -47,5 +49,54 @@ func TestOpenNormalizesLegacyNullCollections(t *testing.T) {
 	}
 	if settings.SourceTimeoutMS == 0 || settings.BlockedCountries == nil {
 		t.Fatalf("new defaults were not merged into legacy settings: %+v", settings)
+	}
+}
+
+func TestPublishSettingsPreserveAndClearTokens(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := store.PublishSettingsView()
+	view.Cloudflare.Enabled = true
+	view.Cloudflare.ZoneID = "zone"
+	view.Cloudflare.RecordName = "cf.example.com"
+	saved, err := store.SavePublishSettings(publish.SaveRequest{Settings: view, CloudflareToken: "secret-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.Cloudflare.TokenConfigured || store.PublishSettings().Cloudflare.APIToken != "secret-token" {
+		t.Fatalf("token was not saved: %+v", saved.Cloudflare)
+	}
+	if _, err := store.SavePublishSettings(publish.SaveRequest{Settings: saved}); err != nil {
+		t.Fatal(err)
+	}
+	if store.PublishSettings().Cloudflare.APIToken != "secret-token" {
+		t.Fatal("empty token input did not preserve credential")
+	}
+	cleared, err := store.ClearPublishCredential("cloudflare")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.Cloudflare.TokenConfigured || cleared.Cloudflare.Enabled || store.PublishSettings().Cloudflare.APIToken != "" {
+		t.Fatalf("credential was not cleared: %+v", cleared.Cloudflare)
+	}
+}
+
+func TestPublicationHistoryUpdateDoesNotChangeRunState(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := model.RunSummary{RunID: "run-1", State: "completed", Results: []model.ProbeResult{}, Failures: map[model.FailureReason]int{}, Publications: []model.PublicationResult{}}
+	if err := store.AddHistory(summary); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdatePublication("run-1", model.PublicationResult{Target: "github", State: "failed", Message: "denied"}); err != nil {
+		t.Fatal(err)
+	}
+	updated, ok := store.HistoryByID("run-1")
+	if !ok || updated.State != "completed" || len(updated.Publications) != 1 || updated.Publications[0].State != "failed" {
+		t.Fatalf("unexpected history: %+v", updated)
 	}
 }

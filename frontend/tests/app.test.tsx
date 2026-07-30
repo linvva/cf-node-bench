@@ -1,9 +1,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
+import { ResultsTable } from "../src/features/results/ResultsTable";
 import { countryOptions } from "../src/features/settings/countries";
 import { validateSettings } from "../src/features/settings/SettingsPage";
-import { getAppState } from "../src/store";
+import { actions, getAppState } from "../src/store";
+import type { RunSummary } from "../src/types";
 
 afterEach(()=>{cleanup();document.documentElement.className="";localStorage.clear();});
 
@@ -50,5 +52,32 @@ describe("CF Node Bench workspace",()=>{
     fireEvent.change(screen.getByLabelText("数据源 URL"),{target:{value:"http://127.0.0.1:8080/nodes"}});
     fireEvent.click(screen.getByRole("button",{name:"保存"}));
     expect(await screen.findByText("本地源")).toBeInTheDocument();
+  });
+
+  it("switches Cloudflare A and TXT controls with a shared format preview",async()=>{
+    render(<App/>); await screen.findByRole("heading",{name:"测速工作台"});
+    fireEvent.click(screen.getByRole("button",{name:"发布"}));
+    expect(await screen.findByRole("heading",{name:"结果发布"})).toBeInTheDocument();
+    expect(screen.getByText("启用 Cloudflare 代理")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab",{name:"TXT 记录"}));
+    expect(screen.queryByText("启用 Cloudflare 代理")).not.toBeInTheDocument();
+    expect(screen.getByText("104.18.1.20:443#US|HTTP44ms|186Mbps")).toBeInTheDocument();
+  });
+
+  it("validates an enabled publish target before saving",async()=>{
+    render(<App/>); await screen.findByRole("heading",{name:"测速工作台"});
+    fireEvent.click(screen.getByRole("button",{name:"发布"}));
+    fireEvent.click(await screen.findByRole("switch",{name:"启用 Cloudflare DNS"}));
+    fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
+    expect(await screen.findByText("启用 Cloudflare 前必须填写 Token、Zone ID 和记录名")).toBeInTheDocument();
+  });
+
+  it("retries a failed publication from the result view",async()=>{
+    const retry=vi.spyOn(actions,"publishRun").mockResolvedValueOnce();
+    const summary={runId:"run-publish",startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),state:"completed",results:[],failures:{},publications:[{target:"github",state:"failed",items:0,message:"denied"}]} as RunSummary;
+    render(<ResultsTable summary={summary}/>);
+    fireEvent.click(screen.getByRole("button",{name:"重试 github"}));
+    await waitFor(()=>expect(retry).toHaveBeenCalledWith("run-publish","github"));
+    retry.mockRestore();
   });
 });

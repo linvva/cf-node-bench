@@ -10,11 +10,13 @@ import (
 
 	"github.com/linvva/cf-node-bench/internal/config"
 	"github.com/linvva/cf-node-bench/internal/model"
+	"github.com/linvva/cf-node-bench/internal/publish"
 	"github.com/linvva/cf-node-bench/internal/source"
 )
 
 type data struct {
 	Settings config.Settings     `json:"settings"`
+	Publish  publish.Settings    `json:"publish"`
 	Sources  []source.HTTPSource `json:"sources"`
 	History  []model.RunSummary  `json:"history"`
 }
@@ -26,7 +28,7 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
-	store := &Store{path: path, data: data{Settings: config.DefaultSettings(), Sources: defaultSources()}}
+	store := &Store{path: path, data: data{Settings: config.DefaultSettings(), Publish: publish.DefaultSettings(), Sources: defaultSources()}}
 	content, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -39,6 +41,10 @@ func Open(path string) (*Store, error) {
 	store.data.Settings.MigrateLegacy()
 	if err := store.data.Settings.Validate(); err != nil {
 		store.data.Settings = config.DefaultSettings()
+	}
+	store.data.Publish.Normalize()
+	if err := store.data.Publish.Validate(); err != nil {
+		store.data.Publish = publish.DefaultSettings()
 	}
 	store.normalize()
 	return store, nil
@@ -67,6 +73,9 @@ func (s *Store) normalize() {
 		if s.data.History[index].Failures == nil {
 			s.data.History[index].Failures = map[model.FailureReason]int{}
 		}
+		if s.data.History[index].Publications == nil {
+			s.data.History[index].Publications = []model.PublicationResult{}
+		}
 	}
 }
 
@@ -94,6 +103,16 @@ func (s *Store) History() []model.RunSummary {
 	return append([]model.RunSummary{}, s.data.History...)
 }
 
+func (s *Store) PublishSettings() publish.Settings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.Publish
+}
+
+func (s *Store) PublishSettingsView() publish.SettingsView {
+	return s.PublishSettings().View()
+}
+
 func (s *Store) SaveSettings(settings config.Settings) error {
 	if err := settings.Validate(); err != nil {
 		return err
@@ -102,6 +121,42 @@ func (s *Store) SaveSettings(settings config.Settings) error {
 	defer s.mu.Unlock()
 	s.data.Settings = settings
 	return s.persistLocked()
+}
+
+func (s *Store) SavePublishSettings(request publish.SaveRequest) (publish.SettingsView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := request.Merge(s.data.Publish)
+	if err := next.Validate(); err != nil {
+		return publish.SettingsView{}, err
+	}
+	s.data.Publish = next
+	if err := s.persistLocked(); err != nil {
+		return publish.SettingsView{}, err
+	}
+	return next.View(), nil
+}
+
+func (s *Store) ClearPublishCredential(target string) (publish.SettingsView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch target {
+	case "cloudflare":
+		s.data.Publish.Cloudflare.APIToken = ""
+		s.data.Publish.Cloudflare.Enabled = false
+	case "github":
+		s.data.Publish.GitHub.Token = ""
+		s.data.Publish.GitHub.Enabled = false
+	case "telegram":
+		s.data.Publish.Telegram.BotToken = ""
+		s.data.Publish.Telegram.Enabled = false
+	default:
+		return publish.SettingsView{}, errors.New("未知发布目标")
+	}
+	if err := s.persistLocked(); err != nil {
+		return publish.SettingsView{}, err
+	}
+	return s.data.Publish.View(), nil
 }
 
 func (s *Store) SaveSources(sources []source.HTTPSource) error {
@@ -133,6 +188,36 @@ func (s *Store) AddHistory(summary model.RunSummary) error {
 		s.data.History = s.data.History[:20]
 	}
 	return s.persistLocked()
+}
+
+func (s *Store) HistoryByID(runID string) (model.RunSummary, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, summary := range s.data.History {
+		if summary.RunID == runID {
+			return summary, true
+		}
+	}
+	return model.RunSummary{}, false
+}
+
+func (s *Store) UpdatePublication(runID string, result model.PublicationResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for historyIndex := range s.data.History {
+		if s.data.History[historyIndex].RunID != runID {
+			continue
+		}
+		for publicationIndex := range s.data.History[historyIndex].Publications {
+			if s.data.History[historyIndex].Publications[publicationIndex].Target == result.Target {
+				s.data.History[historyIndex].Publications[publicationIndex] = result
+				return s.persistLocked()
+			}
+		}
+		s.data.History[historyIndex].Publications = append(s.data.History[historyIndex].Publications, result)
+		return s.persistLocked()
+	}
+	return errors.New("未找到测速历史")
 }
 
 func (s *Store) persistLocked() error {

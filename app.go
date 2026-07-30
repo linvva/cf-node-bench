@@ -11,6 +11,7 @@ import (
 	"github.com/linvva/cf-node-bench/internal/config"
 	"github.com/linvva/cf-node-bench/internal/model"
 	"github.com/linvva/cf-node-bench/internal/probe"
+	"github.com/linvva/cf-node-bench/internal/publish"
 	runengine "github.com/linvva/cf-node-bench/internal/run"
 	"github.com/linvva/cf-node-bench/internal/source"
 	"github.com/linvva/cf-node-bench/internal/storage"
@@ -24,11 +25,12 @@ type NetworkInfo struct {
 }
 
 type Bootstrap struct {
-	Settings config.Settings     `json:"settings"`
-	Sources  []source.HTTPSource `json:"sources"`
-	History  []model.RunSummary  `json:"history"`
-	Network  NetworkInfo         `json:"network"`
-	Current  string              `json:"currentRunId,omitempty"`
+	Settings        config.Settings      `json:"settings"`
+	PublishSettings publish.SettingsView `json:"publishSettings"`
+	Sources         []source.HTTPSource  `json:"sources"`
+	History         []model.RunSummary   `json:"history"`
+	Network         NetworkInfo          `json:"network"`
+	Current         string               `json:"currentRunId,omitempty"`
 }
 
 type App struct {
@@ -36,17 +38,21 @@ type App struct {
 	store   *storage.Store
 	manager runengine.Manager
 	engine  runengine.Engine
+	publish *publish.Service
+	queue   *publish.Coordinator
 	mu      sync.Mutex
 }
 
 func NewApp(store *storage.Store) *App {
 	settings := store.Settings()
-	return &App{store: store, engine: runengine.Engine{Dependencies: runengine.Dependencies{
+	app := &App{store: store, publish: publish.NewService(), engine: runengine.Engine{Dependencies: runengine.Dependencies{
 		Fetcher:   newTrackingFetcher(store, settings),
 		TCP:       probe.TCPProber{Timeout: settings.ConnectTimeout()},
 		HTTPS:     probe.HTTPSProber{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout()},
 		Bandwidth: probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes},
 	}}}
+	app.queue = publish.NewCoordinator(app.publish, app.handlePublishUpdate)
+	return app
 }
 
 type trackingFetcher struct {
@@ -73,10 +79,53 @@ func (f trackingFetcher) Fetch(ctx context.Context, current source.HTTPSource) (
 func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 
 func (a *App) Bootstrap() Bootstrap {
-	return Bootstrap{Settings: a.store.Settings(), Sources: a.store.Sources(), History: a.store.History(), Network: detectNetwork(), Current: a.manager.Current()}
+	return Bootstrap{Settings: a.store.Settings(), PublishSettings: a.store.PublishSettingsView(), Sources: a.store.Sources(), History: a.store.History(), Network: detectNetwork(), Current: a.manager.Current()}
 }
 
 func (a *App) SaveSettings(settings config.Settings) error { return a.store.SaveSettings(settings) }
+
+func (a *App) SavePublishSettings(request publish.SaveRequest) (publish.SettingsView, error) {
+	return a.store.SavePublishSettings(request)
+}
+
+func (a *App) ClearPublishCredential(target string) (publish.SettingsView, error) {
+	return a.store.ClearPublishCredential(target)
+}
+
+func (a *App) TestPublishTarget(target string, request publish.SaveRequest) error {
+	settings := request.Merge(a.store.PublishSettings())
+	settings.Cloudflare.Enabled = target == "cloudflare"
+	settings.GitHub.Enabled = target == "github"
+	settings.Telegram.Enabled = target == "telegram"
+	if err := settings.Validate(); err != nil {
+		return err
+	}
+	ctx := a.appContext()
+	switch target {
+	case "cloudflare":
+		return a.publish.TestCloudflare(ctx, settings)
+	case "github":
+		return a.publish.TestGitHub(ctx, settings)
+	case "telegram":
+		return a.publish.TestTelegram(ctx, settings)
+	default:
+		return fmt.Errorf("未知发布目标")
+	}
+}
+
+func (a *App) PublishRun(runID, target string) error {
+	if target != "all" && target != "cloudflare" && target != "github" && target != "telegram" {
+		return fmt.Errorf("未知发布目标")
+	}
+	summary, ok := a.store.HistoryByID(runID)
+	if !ok {
+		return fmt.Errorf("未找到测速历史")
+	}
+	if summary.State != "completed" {
+		return fmt.Errorf("只有已完成的测速可以发布")
+	}
+	return a.queue.Enqueue(a.appContext(), summary, a.store.PublishSettings(), target)
+}
 
 func (a *App) SaveSources(sources []source.HTTPSource) error {
 	for index, item := range sources {
@@ -106,10 +155,27 @@ func (a *App) StartRun() (string, error) {
 	}, func(summary model.RunSummary) {
 		_ = a.store.AddHistory(summary)
 		runtime.EventsEmit(a.ctx, "run:complete", summary)
+		if summary.State == "completed" {
+			_ = a.queue.Enqueue(a.appContext(), summary, a.store.PublishSettings(), "all")
+		}
 	})
 }
 
 func (a *App) CancelRun() bool { return a.manager.Cancel() }
+
+func (a *App) handlePublishUpdate(update publish.Update) {
+	_ = a.store.UpdatePublication(update.RunID, update.Result)
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "publish:progress", update)
+	}
+}
+
+func (a *App) appContext() context.Context {
+	if a.ctx != nil {
+		return a.ctx
+	}
+	return context.Background()
+}
 
 func detectNetwork() NetworkInfo {
 	interfaces, err := net.Interfaces()

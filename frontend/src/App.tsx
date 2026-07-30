@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { Button } from "@heroui/react";
-import { Activity, Database, Moon, Settings, Sun, SunMoon, Zap } from "lucide-react";
+import { Activity, Database, Moon, Send, Settings, Sun, SunMoon, Zap } from "lucide-react";
 import { actions, useAppStore } from "./store";
 import { RunWorkspace } from "./features/run/RunWorkspace";
 import { SourcesPage } from "./features/sources/SourcesPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
+import { PublishPage } from "./features/publish/PublishPage";
 
-type Page="run"|"sources"|"settings";
+type Page="run"|"sources"|"publish"|"settings";
 type Theme="system"|"light"|"dark";
 
 export function App(){
@@ -30,13 +31,14 @@ export function App(){
       <nav aria-label="主导航">
         <Button variant={page==="run"?"primary":"tertiary"} onPress={()=>setPage("run")}><Activity size={17}/>测速工作台{running&&<span className="live-dot"/>}</Button>
         <Button variant={page==="sources"?"primary":"tertiary"} onPress={()=>setPage("sources")}><Database size={17}/>数据源</Button>
+        <Button variant={page==="publish"?"primary":"tertiary"} onPress={()=>setPage("publish")}><Send size={17}/>发布</Button>
         <Button variant={page==="settings"?"primary":"tertiary"} onPress={()=>setPage("settings")}><Settings size={17}/>设置</Button>
       </nav>
       <div className="sidebar-foot">
         <span title={`切换主题：${theme}`}><Button isIconOnly variant="tertiary" aria-label={`当前主题：${theme}`} onPress={nextTheme}>{themeIcon}</Button></span>
-        <span>v0.1.1 MVP</span>
+        <span>v0.2.0</span>
       </div>
     </aside>
-    <main className="main-content">{page==="run"?<RunWorkspace/>:page==="sources"?<SourcesPage/>:<SettingsPage/>}</main>
+    <main className="main-content">{page==="run"?<RunWorkspace/>:page==="sources"?<SourcesPage/>:page==="publish"?<PublishPage/>:<SettingsPage/>}</main>
   </div>;
 }

@@ -22,14 +22,33 @@ CF Node Bench 是一个跨平台 Cloudflare 候选 IP 测速工具。它在应�
 2. 打开“设置”，按当前设备和网络调整并发、超时、探测次数、候选池和最大下载量。端口或允许国家为空表示不限；排除国家始终优先于允许国家。
 3. 回到“测速工作台”并点击“开始测速”。界面会持续显示数据源、解析/过滤、TCP、HTTPS、带宽和排序阶段的输入、通过、失败、耗时及失败原因；测速过程中可以随时取消。
 4. 完成后可在结果表格中排序、筛选、选择、复制或导出。点击任意节点可查看 TCP、HTTPS、带宽和各部分得分明细。
+5. 如需自动分发结果，打开“发布”配置 Cloudflare、GitHub 或 Telegram。保存后，每次成功完成测速都会在后台发布；取消测速不会发布，发布失败也不会改变测速结果。结果表格会显示各目标状态并允许手动重试。
 
 HTTPS 探测通过候选 `IP:port` 建立连接，但 TLS SNI 和 HTTP Host 均使用 `speed.cloudflare.com` 并正常验证证书。TCP 和 HTTPS 成功率是硬门槛，低可用节点不会仅凭高带宽进入最终排名。
 
+## 发布结果
+
+TXT、GitHub 文件和 Telegram 详细列表共用发布页中的输出字段，默认格式为：
+
+```text
+IP:PORT#国家|HTTP44ms|186Mbps
+```
+
+- Cloudflare `A`：默认模式，只发布端口为 443 的 IPv4，记录内容为纯 IP；`Proxied` 只在此模式生效。
+- Cloudflare `TXT`：发布全部最终节点，每个节点使用上述共享格式。
+- GitHub：通过 Contents API 创建或更新指定文件；内容没有变化时不会产生新提交。
+- Telegram“仅汇总”：发送测速耗时、通过节点数及 Cloudflare/GitHub 发布状态，不包含 IP。
+- Telegram“汇总与节点列表”：先发相同汇总，再分段发送全部最终节点。
+
+Cloudflare 类型切换时，应用会在同一批请求中删除同名且 comment 为 `Managed by CF Node Bench` 的旧 A/TXT 记录，再创建当前类型。没有该标记的用户记录不会被删除；新记录集合为空时也不会删除旧记录。批处理完成后，各 DNS 记录仍可能分别传播，并不保证传播过程原子完成。
+
+建议为 Cloudflare Token 仅授予目标 Zone 的 DNS 编辑权限；GitHub Token 仅授予目标仓库 Contents 写权限。Telegram Bot 只需能够向配置的 Chat ID 发送消息。
+
 ## 本地数据与网络
 
-设置、数据源和最近运行历史保存在操作系统标准配置目录下的 `CF Node Bench/data.json`。应用不需要 Python 或外部 `curl`，不包含账号、云同步、DNS 发布或自动更新。
+设置、发布凭据、数据源和最近运行历史保存在操作系统标准配置目录下的 `CF Node Bench/data.json`。文件使用原子写入并设置为当前用户可读写的 `0600` 权限；凭据以明文保存，但不会返回给前端、写入测速历史或错误日志。发布页中 Token 留空表示保留原值，必须点击对应的清除按钮才能删除凭据。
 
-测速会访问用户配置的数据源以及 Cloudflare 的 `speed.cloudflare.com`。结果来自当前运行设备的真实网络环境；浏览器前端预览只使用模拟桥接，不执行真实网络探测。
+测速会访问用户配置的数据源以及 Cloudflare 的 `speed.cloudflare.com`；启用发布后还会访问相应官方 API。所有 Go HTTP Transport 均显式禁用系统和环境代理。结果来自当前运行设备的真实网络环境；浏览器前端预览只使用模拟桥接，不执行真实网络探测或外部发布。
 
 ## 技术栈
 
@@ -80,8 +99,8 @@ wails build -tags webkit2_41
 推送以 `v` 开头的版本 Tag 会触发 `.github/workflows/release.yml`。流水线先运行 Go 与前端检查，再并行构建 Windows x64、Linux x64 和 macOS Universal 免安装压缩包，最后创建 GitHub Release 并生成 SHA-256 校验文件。
 
 ```bash
-git tag -a v0.1.1 -m "v0.1.1"
-git push origin v0.1.1
+git tag -a v0.2.0 -m "v0.2.0"
+git push origin v0.2.0
 ```
 
 ## 项目结构
@@ -91,7 +110,8 @@ internal/source   HTTP 获取、解析与标准化
 internal/probe    TCP、HTTPS、带宽和统计量
 internal/ranking  硬门槛、归一化和评分
 internal/run      单任务调度、取消和进度事件
-internal/storage  设置、数据源和最近历史
+internal/publish  输出格式、发布客户端和串行队列
+internal/storage  设置、凭据、数据源和最近历史
 frontend/src/features
 ```
 

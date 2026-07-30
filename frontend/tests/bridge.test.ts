@@ -14,6 +14,9 @@ describe("Wails bridge normalization",()=>{
     expect(value.sources).toEqual([]);
     expect(value.history[0].results).toEqual([]);
     expect(value.history[0].failures).toEqual({});
+    expect(value.history[0].publications).toEqual([]);
+    expect(value.publishSettings.cloudflare.recordType).toBe("A");
+    expect(value.publishSettings.telegram.contentMode).toBe("summary");
   });
 
   it("normalizes cancelled summaries and initial progress",()=>{

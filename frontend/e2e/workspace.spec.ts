@@ -103,6 +103,29 @@ test("source enable switches update the active count",async({page})=>{
   await expect(page.locator(".section-heading span")).toHaveText("1 / 2 已启用");
 });
 
+test("publish settings switch modes without overlap",async({page},testInfo)=>{
+  await page.goto("/");
+  await page.getByRole("button",{name:"发布"}).click();
+  await expect(page.getByRole("heading",{name:"结果发布"})).toBeVisible();
+  await expect(page.getByText("启用 Cloudflare 代理")).toBeVisible();
+  await page.getByRole("tab",{name:"TXT 记录"}).click();
+  await expect(page.getByText("启用 Cloudflare 代理")).not.toBeVisible();
+  await expect(page.getByText("104.18.1.20:443#US|HTTP44ms|186Mbps")).toBeVisible();
+  await page.locator(".main-content").evaluate(element=>{element.scrollTop=0;});
+  await page.screenshot({path:testInfo.outputPath("publish-top.png"),fullPage:true});
+  await page.getByRole("tab",{name:"汇总与节点列表"}).click();
+  await page.locator(".main-content").evaluate(element=>{element.scrollTop=element.scrollHeight;});
+  await expect(page.getByRole("button",{name:/测试连接/}).last()).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath("publish.png"),fullPage:true});
+  const clipped=await page.locator("button, input, code").evaluateAll(nodes=>nodes.filter(node=>node.scrollWidth>node.clientWidth+1||node.scrollHeight>node.clientHeight+1).length);
+  expect(clipped).toBe(0);
+  const overlaps=await page.evaluate(()=>{
+    const visible=[...document.querySelectorAll(".publish-section button, .publish-section input")].filter(element=>{const rect=element.getBoundingClientRect();return rect.width>0&&rect.height>0;});
+    return visible.some((element,index)=>visible.slice(index+1).some(other=>{const a=element.getBoundingClientRect(),b=other.getBoundingClientRect();return a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top;}));
+  });
+  expect(overlaps).toBe(false);
+});
+
 test("blocked countries change filter totals and results",async({page})=>{
   await page.goto("/");
   await page.getByRole("button",{name:"设置"}).click();
