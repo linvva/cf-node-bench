@@ -27,6 +27,8 @@ type Store struct {
 	data data
 }
 
+const appDataDirectory = "CF Node Bench"
+
 func Open(path string) (*Store, error) {
 	store := &Store{path: path, data: data{Settings: config.DefaultSettings(), Publish: publish.DefaultSettings(), Sources: defaultSources()}}
 	content, err := os.ReadFile(path)
@@ -79,12 +81,20 @@ func (s *Store) normalize() {
 	}
 }
 
-func OpenDefault() (*Store, error) {
+func DefaultDir() (string, error) {
 	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, appDataDirectory), nil
+}
+
+func OpenDefault() (*Store, error) {
+	dir, err := DefaultDir()
 	if err != nil {
 		return nil, err
 	}
-	return Open(filepath.Join(dir, "CF Node Bench", "data.json"))
+	return Open(filepath.Join(dir, "data.json"))
 }
 
 func (s *Store) Settings() config.Settings {

@@ -11,6 +11,20 @@ import (
 	"github.com/linvva/cf-node-bench/internal/source"
 )
 
+func TestDefaultDirUsesStableApplicationName(t *testing.T) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := DefaultDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(configDir, "CF Node Bench"); dir != want {
+		t.Fatalf("default directory = %q, want %q", dir, want)
+	}
+}
+
 func TestUpdateSourceStatusPreservesEditableFields(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "data.json"))
 	if err != nil {

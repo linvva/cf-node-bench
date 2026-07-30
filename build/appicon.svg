@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">CF Node Bench application icon</title>
+  <desc id="desc">A teal benchmark needle crossing three network nodes on a dark graphite dial.</desc>
+  <rect x="56" y="56" width="912" height="912" rx="220" fill="#171a1e"/>
+  <rect x="82" y="82" width="860" height="860" rx="196" fill="none" stroke="#30363d" stroke-width="12"/>
+
+  <path
+    d="M226 698 C236 456 358 300 512 300 C666 300 788 456 798 698"
+    fill="none"
+    stroke="#394149"
+    stroke-width="92"
+    stroke-linecap="round"
+  />
+
+  <circle cx="288" cy="478" r="42" fill="#f4f7f7"/>
+  <circle cx="512" cy="300" r="42" fill="#f4f7f7"/>
+  <circle cx="736" cy="478" r="42" fill="#2cc9b8"/>
+
+  <path d="M512 694 L736 478" fill="none" stroke="#2cc9b8" stroke-width="58" stroke-linecap="round"/>
+  <circle cx="512" cy="694" r="92" fill="#2cc9b8"/>
+  <circle cx="512" cy="694" r="34" fill="#f4f7f7"/>
+</svg>

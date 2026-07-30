@@ -50,7 +50,9 @@ Telegram 中继必须部署在用户自己的账户中并仅供本人使用。Bo
 
 ## 本地数据与网络
 
-设置、发布凭据、数据源和最近运行历史保存在操作系统标准配置目录下的 `CF Node Bench/data.json`。文件使用原子写入并设置为当前用户可读写的 `0600` 权限；Cloudflare、GitHub 仓库、Gist、Telegram Bot Token 和中继访问密钥均以明文保存，但不会返回给前端、写入测速历史或错误日志。发布页中凭据留空表示保留原值，必须点击对应的清除按钮才能删除。
+设置、发布凭据、数据源和最近运行历史保存在操作系统标准配置目录下的 `CF Node Bench/data.json`。Windows 上的 WebView2 数据固定保存在同一目录的 `WebView2` 子目录。旧版本可能创建同级的 `CF-Node-Bench.exe` WebView2 目录；升级并退出应用后可以删除该旧目录，只会清除旧缓存和主题选择，不要删除包含 `data.json` 的 `CF Node Bench` 目录。
+
+`data.json` 使用原子写入并设置为当前用户可读写的 `0600` 权限；Cloudflare、GitHub 仓库、Gist、Telegram Bot Token 和中继访问密钥均以明文保存，但不会返回给前端、写入测速历史或错误日志。发布页中凭据留空表示保留原值，必须点击对应的清除按钮才能删除。
 
 测速会访问用户配置的数据源以及 Cloudflare 的 `speed.cloudflare.com`；启用发布后还会访问相应官方 API。所有 Go HTTP Transport 均显式禁用系统和环境代理；中继模式是应用直连用户配置的 Worker URL，不会启用系统代理。结果来自当前运行设备的真实网络环境；浏览器前端预览只使用模拟桥接，不执行真实网络探测或外部发布。
 
