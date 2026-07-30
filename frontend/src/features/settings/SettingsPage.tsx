@@ -43,7 +43,7 @@ export function SettingsPage() {
   };
 
   return <div className="page" data-testid="settings-page">
-    <header className="page-header"><div><h1>测速设置</h1><p>控制探测成本、可用性门槛和候选范围；所有网络操作仍有独立超时。</p></div></header>
+    <header className="page-header"><div><h1>测速设置</h1><p>控制探测成本、可用性门槛和候选范围；所有网络操作仍有独立超时。</p></div><div className="page-action-area"><div className="page-actions"><Button variant="primary" onPress={() => void save()}><Save size={15} />保存设置</Button></div><p className="page-action-status" role={error?"alert":undefined} title={error}>{error||"\u00a0"}</p></div></header>
     <div className="settings-layout">
       <div className="settings-column">
         <SettingsSection title="并发" description="并发越高不一定越快，可能受本机网络和系统句柄限制。">
@@ -77,7 +77,6 @@ export function SettingsPage() {
         </SettingsSection>
       </div>
     </div>
-    <div className="settings-footer">{error && <p className="settings-error">{error}</p>}<Button variant="primary" onPress={() => void save()}><Save size={15} />保存设置</Button></div>
   </div>;
 }
 

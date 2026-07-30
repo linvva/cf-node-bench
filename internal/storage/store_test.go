@@ -83,6 +83,94 @@ func TestPublishSettingsPreserveAndClearTokens(t *testing.T) {
 	}
 }
 
+func TestPublishSettingsMigrateV1AndManageGistToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.json")
+	content := []byte(`{"publish":{"version":1,"output":{"country":true,"httpLatency":true,"bandwidth":true},"request":{"timeoutMs":10000,"maxRetries":2,"retryDelayMs":1000},"cloudflare":{"recordType":"A","ttl":60,"apiToken":"cf-old"},"github":{"token":"gh-old","branch":"main","path":"ip.txt"},"telegram":{"botToken":"tg-old","contentMode":"summary"}}}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := store.PublishSettings()
+	if settings.Version != 3 || settings.Gist.Enabled || settings.Gist.Filename != "ip.txt" || settings.Cloudflare.APIToken != "cf-old" || settings.GitHub.Token != "gh-old" || settings.Telegram.BotToken != "tg-old" || settings.Telegram.DeliveryMode != publish.TelegramDeliveryDirect {
+		t.Fatalf("migration changed existing settings: %+v", settings)
+	}
+
+	view := store.PublishSettingsView()
+	view.Gist.Enabled = true
+	view.Gist.GistID = "gist-id"
+	saved, err := store.SavePublishSettings(publish.SaveRequest{Settings: view, GistToken: "gist-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.Gist.TokenConfigured || store.PublishSettings().Gist.Token != "gist-secret" {
+		t.Fatalf("Gist token was not saved: %+v", saved.Gist)
+	}
+	if _, err := store.SavePublishSettings(publish.SaveRequest{Settings: saved}); err != nil {
+		t.Fatal(err)
+	}
+	if store.PublishSettings().Gist.Token != "gist-secret" {
+		t.Fatal("empty Gist token input did not preserve credential")
+	}
+	cleared, err := store.ClearPublishCredential("gist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.Gist.TokenConfigured || cleared.Gist.Enabled || store.PublishSettings().Gist.Token != "" {
+		t.Fatalf("Gist credential was not cleared: %+v", cleared.Gist)
+	}
+}
+
+func TestPublishSettingsPreserveAndClearTelegramRelayKey(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := store.PublishSettingsView()
+	view.Telegram.Enabled = true
+	view.Telegram.ChatID = "123"
+	view.Telegram.DeliveryMode = publish.TelegramDeliveryRelay
+	view.Telegram.RelayURL = "https://relay.example/telegram"
+	saved, err := store.SavePublishSettings(publish.SaveRequest{Settings: view, TelegramBotToken: "bot-secret", TelegramRelayKey: "relay-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.Telegram.TokenConfigured || !saved.Telegram.RelayKeyConfigured {
+		t.Fatalf("Telegram credentials were not saved: %+v", saved.Telegram)
+	}
+	if _, err := store.SavePublishSettings(publish.SaveRequest{Settings: saved}); err != nil {
+		t.Fatal(err)
+	}
+	settings := store.PublishSettings()
+	if settings.Telegram.BotToken != "bot-secret" || settings.Telegram.RelayKey != "relay-secret" {
+		t.Fatalf("empty inputs did not preserve credentials: %+v", settings.Telegram)
+	}
+	cleared, err := store.ClearPublishCredential("telegramRelay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings = store.PublishSettings()
+	if cleared.Telegram.RelayKeyConfigured || cleared.Telegram.Enabled || settings.Telegram.RelayKey != "" || settings.Telegram.BotToken != "bot-secret" {
+		t.Fatalf("relay credential clear changed the wrong fields: %+v", settings.Telegram)
+	}
+	view = store.PublishSettingsView()
+	view.Telegram.Enabled = true
+	view.Telegram.DeliveryMode = publish.TelegramDeliveryDirect
+	if _, err := store.SavePublishSettings(publish.SaveRequest{Settings: view, TelegramRelayKey: "relay-again"}); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err = store.ClearPublishCredential("telegram")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings = store.PublishSettings()
+	if cleared.Telegram.TokenConfigured || cleared.Telegram.Enabled || settings.Telegram.BotToken != "" || settings.Telegram.RelayKey != "relay-again" {
+		t.Fatalf("Bot credential clear changed the wrong fields: %+v", settings.Telegram)
+	}
+}
+
 func TestPublicationHistoryUpdateDoesNotChangeRunState(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "data.json"))
 	if err != nil {

@@ -1,11 +1,11 @@
-import type { Bootstrap, FailureReason, HTTPSource, PublicationResult, PublicationUpdate, PublishSaveRequest, PublishSettingsView, PublishTarget, RunProgress, RunSummary, Settings, StageProgress } from "../types";
+import type { Bootstrap, FailureReason, HTTPSource, PublicationResult, PublicationUpdate, PublishCredentialTarget, PublishSaveRequest, PublishSettingsView, PublishTarget, RunProgress, RunSummary, Settings, StageProgress } from "../types";
 
 type Handler<T> = (value: T) => void;
 
 declare global {
   interface Window {
-    go?: { main?: { App?: { Bootstrap(): Promise<Bootstrap>; SaveSettings(value: Settings): Promise<void>; SaveSources(value: HTTPSource[]): Promise<void>; SavePublishSettings(value: PublishSaveRequest): Promise<PublishSettingsView>; ClearPublishCredential(target: PublishTarget): Promise<PublishSettingsView>; TestPublishTarget(target: PublishTarget, value: PublishSaveRequest): Promise<void>; PublishRun(runId: string, target: "all" | PublishTarget): Promise<void>; StartRun(): Promise<string>; CancelRun(): Promise<boolean> } } };
-    runtime?: { EventsOn(name: string, handler: Handler<unknown>): () => void };
+    go?: { main?: { App?: { Bootstrap(): Promise<Bootstrap>; SaveSettings(value: Settings): Promise<void>; SaveSources(value: HTTPSource[]): Promise<void>; SavePublishSettings(value: PublishSaveRequest): Promise<PublishSettingsView>; ClearPublishCredential(target: PublishCredentialTarget): Promise<PublishSettingsView>; TestPublishTarget(target: PublishTarget, value: PublishSaveRequest): Promise<void>; PublishRun(runId: string, target: "all" | PublishTarget): Promise<void>; StartRun(): Promise<string>; CancelRun(): Promise<boolean> } } };
+    runtime?: { EventsOn(name: string, handler: Handler<unknown>): () => void; BrowserOpenURL?(url: string): void };
   }
 }
 
@@ -24,7 +24,8 @@ export const defaultPublishSettings: PublishSettingsView = {
   request:{timeoutMs:10000,maxRetries:2,retryDelayMs:1000},
   cloudflare:{enabled:false,tokenConfigured:false,zoneId:"",recordName:"",recordType:"A",ttl:60,proxied:false},
   github:{enabled:false,tokenConfigured:false,owner:"",repository:"",branch:"main",path:"ip.txt"},
-  telegram:{enabled:false,tokenConfigured:false,chatId:"",contentMode:"summary"},
+  gist:{enabled:false,tokenConfigured:false,gistId:"",filename:"ip.txt"},
+  telegram:{enabled:false,tokenConfigured:false,chatId:"",contentMode:"summary",deliveryMode:"direct",relayUrl:"",relayKeyConfigured:false},
 };
 
 export function normalizeSummary(value: RunSummary): RunSummary {
@@ -132,7 +133,8 @@ function normalizePublishSettings(value?:PublishSettingsView):PublishSettingsVie
     request:{...defaultPublishSettings.request,...value?.request},
     cloudflare:{...defaultPublishSettings.cloudflare,...value?.cloudflare,recordType:value?.cloudflare?.recordType||"A"},
     github:{...defaultPublishSettings.github,...value?.github},
-    telegram:{...defaultPublishSettings.telegram,...value?.telegram,contentMode:value?.telegram?.contentMode||"summary"},
+    gist:{...defaultPublishSettings.gist,...value?.gist},
+    telegram:{...defaultPublishSettings.telegram,...value?.telegram,contentMode:value?.telegram?.contentMode||"summary",deliveryMode:value?.telegram?.deliveryMode||"direct"},
   };
 }
 
@@ -148,12 +150,17 @@ export const bridge = {
   async savePublishSettings(value: PublishSaveRequest) {
     if(window.go?.main?.App) return window.go.main.App.SavePublishSettings(value);
     const current=mockData.publishSettings;
-    mockData.publishSettings={...structuredClone(value.settings),cloudflare:{...value.settings.cloudflare,tokenConfigured:current.cloudflare.tokenConfigured||Boolean(value.cloudflareToken.trim())},github:{...value.settings.github,tokenConfigured:current.github.tokenConfigured||Boolean(value.githubToken.trim())},telegram:{...value.settings.telegram,tokenConfigured:current.telegram.tokenConfigured||Boolean(value.telegramBotToken.trim())}};
+    mockData.publishSettings={...structuredClone(value.settings),cloudflare:{...value.settings.cloudflare,tokenConfigured:current.cloudflare.tokenConfigured||Boolean(value.cloudflareToken.trim())},github:{...value.settings.github,tokenConfigured:current.github.tokenConfigured||Boolean(value.githubToken.trim())},gist:{...value.settings.gist,tokenConfigured:current.gist.tokenConfigured||Boolean(value.gistToken.trim())},telegram:{...value.settings.telegram,tokenConfigured:current.telegram.tokenConfigured||Boolean(value.telegramBotToken.trim()),relayKeyConfigured:current.telegram.relayKeyConfigured||Boolean(value.telegramRelayKey.trim())}};
     return structuredClone(mockData.publishSettings);
   },
-  async clearPublishCredential(target: PublishTarget) {
+  async clearPublishCredential(target: PublishCredentialTarget) {
     if(window.go?.main?.App) return window.go.main.App.ClearPublishCredential(target);
-    mockData.publishSettings={...mockData.publishSettings,[target]:{...mockData.publishSettings[target],enabled:false,tokenConfigured:false}};
+    if(target==="telegramRelay"){
+      const telegram=mockData.publishSettings.telegram;
+      mockData.publishSettings={...mockData.publishSettings,telegram:{...telegram,enabled:telegram.deliveryMode==="relay"?false:telegram.enabled,relayKeyConfigured:false}};
+    }else{
+      mockData.publishSettings={...mockData.publishSettings,[target]:{...mockData.publishSettings[target],enabled:false,tokenConfigured:false}};
+    }
     return structuredClone(mockData.publishSettings);
   },
   async testPublishTarget(target: PublishTarget,value:PublishSaveRequest) { if(window.go?.main?.App) return window.go.main.App.TestPublishTarget(target,value); },
@@ -161,11 +168,11 @@ export const bridge = {
     if(window.go?.main?.App) return window.go.main.App.PublishRun(runId,target);
     const summary=mockData.history.find(item=>item.runId===runId);
     if(!summary||summary.state!=="completed") throw new Error("只有已完成的测速可以发布");
-    const targets:PublishTarget[]=target==="all"?(["cloudflare","github","telegram"] as PublishTarget[]).filter(current=>mockData.publishSettings[current].enabled):[target];
+    const targets:PublishTarget[]=target==="all"?(["cloudflare","github","gist","telegram"] as PublishTarget[]).filter(current=>mockData.publishSettings[current].enabled):[target];
     for(const current of targets) mockPublication({runId,result:{target:current,state:"queued",items:0}});
     window.setTimeout(()=>{
       const now=new Date().toISOString();
-      for(const current of targets) mockPublication({runId,result:{target:current,state:"succeeded",items:summary.results.length,recordType:current==="cloudflare"?mockData.publishSettings.cloudflare.recordType:undefined,message:current==="cloudflare"?`已写入 ${summary.results.length} 条记录`:"发布成功",startedAt:now,finishedAt:now}});
+      for(const current of targets) mockPublication({runId,result:{target:current,state:"succeeded",items:summary.results.length,recordType:current==="cloudflare"?mockData.publishSettings.cloudflare.recordType:undefined,url:current==="gist"?"https://gist.githubusercontent.com/example/raw/ip.txt":undefined,message:current==="cloudflare"?`已写入 ${summary.results.length} 条记录`:"发布成功",startedAt:now,finishedAt:now}});
     },180);
   },
   async startRun() {

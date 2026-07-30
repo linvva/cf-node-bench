@@ -122,6 +122,7 @@ type PublicationResult struct {
 	Eligible   int       `json:"eligible,omitempty"`
 	Skipped    int       `json:"skipped,omitempty"`
 	RecordType string    `json:"recordType,omitempty"`
+	URL        string    `json:"url,omitempty"`
 	Message    string    `json:"message,omitempty"`
 	StartedAt  time.Time `json:"startedAt"`
 	FinishedAt time.Time `json:"finishedAt,omitempty"`

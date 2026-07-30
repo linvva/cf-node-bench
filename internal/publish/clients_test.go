@@ -154,10 +154,11 @@ func TestTelegramSummaryDetailsAndRetry(t *testing.T) {
 	settings.Request.MaxRetries, settings.Request.RetryDelayMS = 1, 0
 	settings.Cloudflare.Enabled = true
 	settings.GitHub.Enabled = true
-	settings.Telegram = TelegramSettings{Enabled: true, BotToken: "secret", ChatID: "123", ContentMode: "summary"}
-	outcomes := map[string]model.PublicationResult{"cloudflare": {State: "succeeded", Items: 1}, "github": {State: "failed", Message: "denied"}}
+	settings.Gist.Enabled = true
+	settings.Telegram = TelegramSettings{Enabled: true, BotToken: "secret", ChatID: "123", ContentMode: "summary", DeliveryMode: TelegramDeliveryDirect}
+	outcomes := map[string]model.PublicationResult{"cloudflare": {State: "succeeded", Items: 1}, "github": {State: "failed", Message: "denied"}, "gist": {State: "succeeded", Items: 2}}
 	result := testService(server).PublishTelegram(t.Context(), testSummary(), settings, outcomes)
-	if result.State != "succeeded" || attempts != 2 || result.Items != 2 || len(texts) != 1 || strings.Contains(texts[0], "1.1.1.1") || !strings.Contains(texts[0], "GitHub：失败") {
+	if result.State != "succeeded" || attempts != 2 || result.Items != 2 || len(texts) != 1 || strings.Contains(texts[0], "1.1.1.1") || !strings.Contains(texts[0], "GitHub 仓库：失败") || !strings.Contains(texts[0], "GitHub Gist：成功") {
 		t.Fatalf("summary result=%+v attempts=%d texts=%v", result, attempts, texts)
 	}
 
@@ -178,7 +179,7 @@ func TestTelegramErrorsRedactToken(t *testing.T) {
 	defer server.Close()
 	settings := DefaultSettings()
 	settings.Request.MaxRetries = 0
-	settings.Telegram = TelegramSettings{Enabled: true, BotToken: token, ChatID: "123", ContentMode: "summary"}
+	settings.Telegram = TelegramSettings{Enabled: true, BotToken: token, ChatID: "123", ContentMode: "summary", DeliveryMode: TelegramDeliveryDirect}
 	result := testService(server).PublishTelegram(context.Background(), testSummary(), settings, nil)
 	if strings.Contains(result.Message, token) || !strings.Contains(result.Message, "[REDACTED]") {
 		t.Fatalf("message=%q", result.Message)
@@ -269,11 +270,65 @@ func TestDirectTransportAndTelegramZeroResult(t *testing.T) {
 	defer server.Close()
 	settings := DefaultSettings()
 	settings.Request.MaxRetries = 0
-	settings.Telegram = TelegramSettings{Enabled: true, BotToken: "secret", ChatID: "chat", ContentMode: "details"}
+	settings.Telegram = TelegramSettings{Enabled: true, BotToken: "secret", ChatID: "chat", ContentMode: "details", DeliveryMode: TelegramDeliveryDirect}
 	summary := testSummary()
 	summary.Results = nil
 	result := testService(server).PublishTelegram(t.Context(), summary, settings, nil)
 	if result.State != "succeeded" || !strings.Contains(text, "通过节点：0") || strings.Contains(text, "节点列表") {
 		t.Fatalf("result=%+v text=%q", result, text)
+	}
+}
+
+func TestTelegramRelayForwardsOnlyRequiredRequestData(t *testing.T) {
+	botToken, relayKey := "123456:bot-secret", "relay-secret"
+	methods := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/telegram" || strings.Contains(r.URL.String(), botToken) {
+			t.Errorf("unexpected relay URL: %s", r.URL.String())
+		}
+		if r.Header.Get("Authorization") != "Bearer "+relayKey {
+			t.Errorf("authorization=%q", r.Header.Get("Authorization"))
+		}
+		var request struct {
+			BotToken string         `json:"botToken"`
+			Method   string         `json:"method"`
+			Payload  map[string]any `json:"payload"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request.BotToken != botToken || request.Payload["chat_id"] != "chat" {
+			t.Errorf("request=%+v", request)
+		}
+		methods = append(methods, request.Method)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
+	}))
+	defer server.Close()
+	settings := DefaultSettings()
+	settings.Request.MaxRetries = 0
+	settings.Telegram = TelegramSettings{Enabled: true, BotToken: botToken, ChatID: "chat", ContentMode: "summary", DeliveryMode: TelegramDeliveryRelay, RelayURL: server.URL + "/telegram", RelayKey: relayKey}
+	service := testService(server)
+	if err := service.TestTelegram(t.Context(), settings); err != nil {
+		t.Fatal(err)
+	}
+	result := service.PublishTelegram(t.Context(), testSummary(), settings, nil)
+	if result.State != "succeeded" || len(methods) != 2 || methods[0] != "getChat" || methods[1] != "sendMessage" {
+		t.Fatalf("result=%+v methods=%v", result, methods)
+	}
+}
+
+func TestTelegramRelayErrorsRedactBothCredentials(t *testing.T) {
+	botToken, relayKey := "123456:bot-secret", "relay-secret"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, `{"ok":false,"description":"%s %s"}`, botToken, relayKey)
+	}))
+	defer server.Close()
+	settings := DefaultSettings()
+	settings.Request.MaxRetries = 0
+	settings.Telegram = TelegramSettings{Enabled: true, BotToken: botToken, ChatID: "chat", ContentMode: "summary", DeliveryMode: TelegramDeliveryRelay, RelayURL: server.URL + "/telegram", RelayKey: relayKey}
+	result := testService(server).PublishTelegram(t.Context(), testSummary(), settings, nil)
+	if strings.Contains(result.Message, botToken) || strings.Contains(result.Message, relayKey) || !strings.Contains(result.Message, "[REDACTED]") {
+		t.Fatalf("message=%q", result.Message)
 	}
 }

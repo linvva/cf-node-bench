@@ -54,6 +54,9 @@ jobs:
       - name: Run frontend tests
         run: pnpm test
 
+      - name: Run Telegram relay tests
+        run: pnpm test:relay
+
       - name: Check frontend types
         run: pnpm typecheck
 

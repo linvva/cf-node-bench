@@ -1,0 +1,5 @@
+{
+  "name": "cfnb-telegram-relay",
+  "private": true,
+  "type": "module"
+}

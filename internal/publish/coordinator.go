@@ -41,7 +41,7 @@ func NewCoordinator(service *Service, update func(Update)) *Coordinator {
 }
 
 func (c *Coordinator) Enqueue(ctx context.Context, summary model.RunSummary, settings Settings, target string) error {
-	if target == "all" && !settings.Cloudflare.Enabled && !settings.GitHub.Enabled && !settings.Telegram.Enabled {
+	if target == "all" && !settings.Cloudflare.Enabled && !settings.GitHub.Enabled && !settings.Gist.Enabled && !settings.Telegram.Enabled {
 		return ErrNoTargets
 	}
 	if target != "all" && !targetEnabled(settings, target) {
@@ -97,7 +97,7 @@ func (c *Coordinator) run(job publishJob) {
 	outcomes := publicationMap(job.summary.Publications)
 	var mu sync.Mutex
 	var wait sync.WaitGroup
-	for _, target := range []string{"cloudflare", "github"} {
+	for _, target := range []string{"cloudflare", "github", "gist"} {
 		if !targetEnabled(job.settings, target) {
 			continue
 		}
@@ -125,6 +125,8 @@ func (c *Coordinator) runTarget(job publishJob, target string, outcomes map[stri
 		return c.service.PublishCloudflare(job.ctx, job.summary, job.settings)
 	case "github":
 		return c.service.PublishGitHub(job.ctx, job.summary, job.settings)
+	case "gist":
+		return c.service.PublishGist(job.ctx, job.summary, job.settings)
 	case "telegram":
 		return c.service.PublishTelegram(job.ctx, job.summary, job.settings, outcomes)
 	default:
@@ -144,6 +146,8 @@ func targetEnabled(settings Settings, target string) bool {
 		return settings.Cloudflare.Enabled
 	case "github":
 		return settings.GitHub.Enabled
+	case "gist":
+		return settings.Gist.Enabled
 	case "telegram":
 		return settings.Telegram.Enabled
 	default:
@@ -156,7 +160,7 @@ func jobTargets(settings Settings, target string) []string {
 		return []string{target}
 	}
 	targets := []string{}
-	for _, current := range []string{"cloudflare", "github", "telegram"} {
+	for _, current := range []string{"cloudflare", "github", "gist", "telegram"} {
 		if targetEnabled(settings, current) {
 			targets = append(targets, current)
 		}

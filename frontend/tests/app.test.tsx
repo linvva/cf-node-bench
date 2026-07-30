@@ -58,6 +58,8 @@ describe("CF Node Bench workspace",()=>{
     render(<App/>); await screen.findByRole("heading",{name:"测速工作台"});
     fireEvent.click(screen.getByRole("button",{name:"发布"}));
     expect(await screen.findByRole("heading",{name:"结果发布"})).toBeInTheDocument();
+    expect(screen.getByText("自动发布尚未生效")).toBeInTheDocument();
+    expect(screen.getByText(/启用目标并保存设置后，测速成功完成时会自动发布/)).toBeInTheDocument();
     expect(screen.getByText("启用 Cloudflare 代理")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab",{name:"TXT 记录"}));
     expect(screen.queryByText("启用 Cloudflare 代理")).not.toBeInTheDocument();
@@ -72,6 +74,41 @@ describe("CF Node Bench workspace",()=>{
     expect(await screen.findByText("启用 Cloudflare 前必须填写 Token、Zone ID 和记录名")).toBeInTheDocument();
   });
 
+  it("keeps Gist separate from repository publishing and validates its credentials",async()=>{
+    render(<App/>); await screen.findByRole("heading",{name:"测速工作台"});
+    fireEvent.click(screen.getByRole("button",{name:"发布"}));
+    expect(await screen.findByRole("switch",{name:"启用 GitHub 仓库"})).toBeInTheDocument();
+    expect(screen.getByText(/Secret Gist 只是未公开列出/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch",{name:"启用 GitHub Gist"}));
+    fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
+    expect(await screen.findByText("启用 Gist 前必须填写 Token、Gist ID 和文件名")).toBeInTheDocument();
+  });
+
+  it("shows dedicated Telegram relay fields and validates its separate key",async()=>{
+    render(<App/>); await screen.findByRole("heading",{name:"测速工作台"});
+    fireEvent.click(screen.getByRole("button",{name:"发布"}));
+    fireEvent.click(await screen.findByRole("tab",{name:"专属中继"}));
+    expect(screen.getByLabelText("中继 URL")).toBeInTheDocument();
+    expect(screen.getByLabelText("中继访问密钥")).toBeInTheDocument();
+    expect(screen.getByText(/只使用部署在自己账户下的专属中继/)).toBeInTheDocument();
+    const clipboard=vi.spyOn(navigator.clipboard,"writeText");
+    fireEvent.click(screen.getByRole("button",{name:"部署 Worker"}));
+    expect(await screen.findByRole("heading",{name:"部署 Telegram 专属中继"})).toBeInTheDocument();
+    expect(screen.getByLabelText("worker.js 代码")).toHaveTextContent("ALLOWED_METHODS");
+    fireEvent.click(screen.getByRole("button",{name:"复制代码"}));
+    await waitFor(()=>expect(clipboard).toHaveBeenCalledWith(expect.stringContaining("api.telegram.org")));
+    fireEvent.click(screen.getByRole("button",{name:"关闭部署引导"}));
+    await waitFor(()=>expect(screen.queryByRole("heading",{name:"部署 Telegram 专属中继"})).not.toBeInTheDocument());
+    clipboard.mockRestore();
+    fireEvent.click(screen.getByRole("switch",{name:"启用 Telegram Bot"}));
+    fireEvent.change(screen.getByLabelText("Chat ID"),{target:{value:"123"}});
+    fireEvent.change(screen.getByLabelText("Bot Token"),{target:{value:"123456:token"}});
+    fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
+    expect(await screen.findByText("启用 Telegram 专属中继前必须填写中继 URL 和访问密钥")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab",{name:"直连 Telegram"}));
+    expect(screen.queryByLabelText("中继 URL")).not.toBeInTheDocument();
+  });
+
   it("retries a failed publication from the result view",async()=>{
     const retry=vi.spyOn(actions,"publishRun").mockResolvedValueOnce();
     const summary={runId:"run-publish",startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),state:"completed",results:[],failures:{},publications:[{target:"github",state:"failed",items:0,message:"denied"}]} as RunSummary;
@@ -79,5 +116,12 @@ describe("CF Node Bench workspace",()=>{
     fireEvent.click(screen.getByRole("button",{name:"重试 github"}));
     await waitFor(()=>expect(retry).toHaveBeenCalledWith("run-publish","github"));
     retry.mockRestore();
+  });
+
+  it("shows the Gist raw URL in publication results",()=>{
+    const summary={runId:"run-gist",startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),state:"completed",results:[],failures:{},publications:[{target:"gist",state:"succeeded",items:2,url:"https://raw.test/ip.txt",message:"Gist 文件已更新"}]} as RunSummary;
+    render(<ResultsTable summary={summary}/>);
+    expect(screen.getByRole("link",{name:"打开 Gist Raw 文件"})).toHaveAttribute("href","https://raw.test/ip.txt");
+    expect(screen.getByText("Gist")).toBeInTheDocument();
   });
 });

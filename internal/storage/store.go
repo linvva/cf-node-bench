@@ -147,9 +147,17 @@ func (s *Store) ClearPublishCredential(target string) (publish.SettingsView, err
 	case "github":
 		s.data.Publish.GitHub.Token = ""
 		s.data.Publish.GitHub.Enabled = false
+	case "gist":
+		s.data.Publish.Gist.Token = ""
+		s.data.Publish.Gist.Enabled = false
 	case "telegram":
 		s.data.Publish.Telegram.BotToken = ""
 		s.data.Publish.Telegram.Enabled = false
+	case "telegramRelay":
+		s.data.Publish.Telegram.RelayKey = ""
+		if s.data.Publish.Telegram.DeliveryMode == publish.TelegramDeliveryRelay {
+			s.data.Publish.Telegram.Enabled = false
+		}
 	default:
 		return publish.SettingsView{}, errors.New("未知发布目标")
 	}

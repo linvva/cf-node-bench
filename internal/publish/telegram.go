@@ -40,14 +40,23 @@ func (s *Service) TestTelegram(ctx context.Context, settings Settings) error {
 
 func (s *Service) telegramRequest(ctx context.Context, settings Settings, method string, payload any) error {
 	endpoint := strings.TrimRight(s.TelegramBaseURL, "/") + "/bot" + settings.Telegram.BotToken + "/" + method
-	status, body, err := s.request(ctx, settings.Request, http.MethodPost, endpoint, payload, nil, settings.Telegram.BotToken)
+	headers := map[string]string(nil)
+	requestPayload := payload
+	secrets := []string{settings.Telegram.BotToken}
+	if settings.Telegram.DeliveryMode == TelegramDeliveryRelay {
+		endpoint = settings.Telegram.RelayURL
+		headers = map[string]string{"Authorization": "Bearer " + settings.Telegram.RelayKey}
+		requestPayload = map[string]any{"botToken": settings.Telegram.BotToken, "method": method, "payload": payload}
+		secrets = append(secrets, settings.Telegram.RelayKey)
+	}
+	status, body, err := s.request(ctx, settings.Request, http.MethodPost, endpoint, requestPayload, headers, secrets...)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
 		return fmt.Errorf("Telegram HTTP %d", status)
 	}
-	return sanitize(successEnvelope(body), settings.Telegram.BotToken)
+	return sanitize(successEnvelope(body), secrets...)
 }
 
 func telegramSummary(summary model.RunSummary, settings Settings, outcomes map[string]model.PublicationResult) string {
@@ -57,7 +66,8 @@ func telegramSummary(summary model.RunSummary, settings Settings, outcomes map[s
 		fmt.Sprintf("耗时：%.1f 秒", duration.Seconds()),
 		fmt.Sprintf("通过节点：%d", len(summary.Results)),
 		"Cloudflare：" + targetSummary("cloudflare", settings.Cloudflare.Enabled, outcomes),
-		"GitHub：" + targetSummary("github", settings.GitHub.Enabled, outcomes),
+		"GitHub 仓库：" + targetSummary("github", settings.GitHub.Enabled, outcomes),
+		"GitHub Gist：" + targetSummary("gist", settings.Gist.Enabled, outcomes),
 	}
 	return strings.Join(lines, "\n")
 }

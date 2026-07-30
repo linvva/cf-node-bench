@@ -16,7 +16,11 @@ describe("Wails bridge normalization",()=>{
     expect(value.history[0].failures).toEqual({});
     expect(value.history[0].publications).toEqual([]);
     expect(value.publishSettings.cloudflare.recordType).toBe("A");
+    expect(value.publishSettings.gist).toEqual({enabled:false,tokenConfigured:false,gistId:"",filename:"ip.txt"});
     expect(value.publishSettings.telegram.contentMode).toBe("summary");
+    expect(value.publishSettings.telegram.deliveryMode).toBe("direct");
+    expect(value.publishSettings.telegram.relayUrl).toBe("");
+    expect(value.publishSettings.telegram.relayKeyConfigured).toBe(false);
   });
 
   it("normalizes cancelled summaries and initial progress",()=>{

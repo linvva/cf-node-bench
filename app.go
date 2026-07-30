@@ -96,6 +96,7 @@ func (a *App) TestPublishTarget(target string, request publish.SaveRequest) erro
 	settings := request.Merge(a.store.PublishSettings())
 	settings.Cloudflare.Enabled = target == "cloudflare"
 	settings.GitHub.Enabled = target == "github"
+	settings.Gist.Enabled = target == "gist"
 	settings.Telegram.Enabled = target == "telegram"
 	if err := settings.Validate(); err != nil {
 		return err
@@ -106,6 +107,8 @@ func (a *App) TestPublishTarget(target string, request publish.SaveRequest) erro
 		return a.publish.TestCloudflare(ctx, settings)
 	case "github":
 		return a.publish.TestGitHub(ctx, settings)
+	case "gist":
+		return a.publish.TestGist(ctx, settings)
 	case "telegram":
 		return a.publish.TestTelegram(ctx, settings)
 	default:
@@ -114,7 +117,7 @@ func (a *App) TestPublishTarget(target string, request publish.SaveRequest) erro
 }
 
 func (a *App) PublishRun(runID, target string) error {
-	if target != "all" && target != "cloudflare" && target != "github" && target != "telegram" {
+	if target != "all" && target != "cloudflare" && target != "github" && target != "gist" && target != "telegram" {
 		return fmt.Errorf("未知发布目标")
 	}
 	summary, ok := a.store.HistoryByID(runID)

@@ -2,7 +2,7 @@ import { memo, useMemo, useState } from "react";
 import { Button, Checkbox, Drawer, Input, Popover, Table, toast } from "@heroui/react";
 import { Clipboard, Download, RotateCw, Search, Send, SlidersHorizontal, X } from "lucide-react";
 import { actions } from "../../store";
-import type { ProbeResult, RunSummary } from "../../types";
+import type { ProbeResult, PublishTarget, RunSummary } from "../../types";
 import { PublicationStatus } from "../publish/PublishPage";
 
 type SortKey = "score" | "tcp" | "https" | "bandwidth";
@@ -52,14 +52,14 @@ export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: 
     anchor.click();
     URL.revokeObjectURL(url);
   };
-  const publish=async(target:"all"|"cloudflare"|"github"|"telegram")=>{
+  const publish=async(target:"all"|PublishTarget)=>{
     if(!summary)return;
     try{await actions.publishRun(summary.runId,target);toast.success("发布任务已加入队列");}catch(reason){toast.danger(String(reason));}
   };
 
   return <section className="panel results-panel">
     <div className="section-heading"><h2>测速结果</h2><span>{summary?.state === "cancelled" ? "任务已取消" : summary ? `完成于 ${new Date(summary.finishedAt).toLocaleTimeString("zh-CN")}` : "等待首次测速"}</span></div>
-    {summary?.state==="completed"&&<div className="publication-strip" aria-label="发布状态">{summary.publications.length?summary.publications.map(result=><div className="publication-item" key={result.target}><strong>{{cloudflare:"Cloudflare",github:"GitHub",telegram:"Telegram"}[result.target]}</strong><PublicationStatus result={result}/><span className="spacer"/><Button isIconOnly variant="tertiary" aria-label={`重试 ${result.target}`} isDisabled={result.state==="queued"||result.state==="running"} onPress={()=>void publish(result.target)}><RotateCw size={14}/></Button></div>):<><span className="results-summary">尚无发布记录</span><span className="spacer"/><Button variant="tertiary" onPress={()=>void publish("all")}><Send size={14}/>发布结果</Button></>}</div>}
+    {summary?.state==="completed"&&<div className="publication-strip" aria-label="发布状态">{summary.publications.length?summary.publications.map(result=><div className="publication-item" key={result.target}><strong>{{cloudflare:"Cloudflare",github:"GitHub 仓库",gist:"Gist",telegram:"Telegram"}[result.target]}</strong><PublicationStatus result={result}/><span className="spacer"/><Button isIconOnly variant="tertiary" aria-label={`重试 ${result.target}`} isDisabled={result.state==="queued"||result.state==="running"} onPress={()=>void publish(result.target)}><RotateCw size={14}/></Button></div>):<><span className="results-summary">尚无发布记录</span><span className="spacer"/><Button variant="tertiary" onPress={()=>void publish("all")}><Send size={14}/>发布结果</Button></>}</div>}
     <div className="results-toolbar">
       <Input className="search" aria-label="筛选节点" placeholder="筛选 IP、端口或国家" value={query} onChange={(event) => setQuery(event.target.value)} />
       <Button variant="secondary" onPress={() => setSort(sort === "score" ? "tcp" : sort === "tcp" ? "https" : sort === "https" ? "bandwidth" : "score")}>排序：{{ score: "综合分", tcp: "TCP P95", https: "HTTPS P95", bandwidth: "带宽" }[sort]}</Button>

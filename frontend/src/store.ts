@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { bridge } from "./lib/bridge";
-import type { Bootstrap, HTTPSource, PublicationResult, PublicationUpdate, PublishSaveRequest, PublishSettingsView, PublishTarget, RunProgress, RunSummary, Settings } from "./types";
+import type { Bootstrap, HTTPSource, PublicationResult, PublicationUpdate, PublishCredentialTarget, PublishSaveRequest, PublishSettingsView, PublishTarget, RunProgress, RunSummary, Settings } from "./types";
 
 interface AppState extends Bootstrap { ready:boolean; running:boolean; progress?:RunProgress; current?:RunSummary; error?:string }
 const initial:AppState={ready:false,running:false,settings:{} as Settings,publishSettings:{} as PublishSettingsView,sources:[],history:[],network:{interface:"",ipv4:"",status:"unavailable"}};
@@ -23,7 +23,7 @@ export const actions={
   async saveSettings(settings:Settings){ await bridge.saveSettings(settings); setState({settings}); },
   async saveSources(sources:HTTPSource[]){ await bridge.saveSources(sources); setState({sources}); },
   async savePublishSettings(request:PublishSaveRequest){ const publishSettings=await bridge.savePublishSettings(request); setState({publishSettings}); return publishSettings; },
-  async clearPublishCredential(target:PublishTarget){ const publishSettings=await bridge.clearPublishCredential(target); setState({publishSettings}); return publishSettings; },
+  async clearPublishCredential(target:PublishCredentialTarget){ const publishSettings=await bridge.clearPublishCredential(target); setState({publishSettings}); return publishSettings; },
   async testPublishTarget(target:PublishTarget,request:PublishSaveRequest){ await bridge.testPublishTarget(target,request); },
   async publishRun(runId:string,target:"all"|PublishTarget){ await bridge.publishRun(runId,target); },
 };

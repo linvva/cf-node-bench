@@ -13,14 +13,17 @@ import (
 	"github.com/linvva/cf-node-bench/internal/model"
 )
 
-func TestCoordinatorRunsCloudflareAndGitHubBeforeTelegram(t *testing.T) {
+func TestCoordinatorRunsUpstreamTargetsInParallelBeforeTelegram(t *testing.T) {
 	var cloudflareDone atomic.Bool
 	var githubDone atomic.Bool
+	var gistDone atomic.Bool
 	var telegramAfterTargets atomic.Bool
 	cloudflareStarted := make(chan struct{})
 	githubStarted := make(chan struct{})
+	gistStarted := make(chan struct{})
 	var cloudflareOnce sync.Once
 	var githubOnce sync.Once
+	var gistOnce sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/dns_records/batch"):
@@ -29,6 +32,11 @@ func TestCoordinatorRunsCloudflareAndGitHubBeforeTelegram(t *testing.T) {
 			case <-githubStarted:
 			case <-time.After(time.Second):
 				t.Error("GitHub did not run in parallel with Cloudflare")
+			}
+			select {
+			case <-gistStarted:
+			case <-time.After(time.Second):
+				t.Error("Gist did not run in parallel with Cloudflare")
 			}
 			cloudflareDone.Store(true)
 			_, _ = w.Write([]byte(`{"success":true}`))
@@ -44,10 +52,31 @@ func TestCoordinatorRunsCloudflareAndGitHubBeforeTelegram(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Error("Cloudflare did not run in parallel with GitHub")
 			}
+			select {
+			case <-gistStarted:
+			case <-time.After(time.Second):
+				t.Error("Gist did not run in parallel with GitHub")
+			}
 			githubDone.Store(true)
 			_, _ = w.Write([]byte(`{"content":{"sha":"new"}}`))
+		case strings.Contains(r.URL.Path, "/gists/") && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"id":"gist-id","files":{"ip.txt":{"filename":"ip.txt","content":"old"}}}`))
+		case strings.Contains(r.URL.Path, "/gists/"):
+			gistOnce.Do(func() { close(gistStarted) })
+			select {
+			case <-cloudflareStarted:
+			case <-time.After(time.Second):
+				t.Error("Cloudflare did not run in parallel with Gist")
+			}
+			select {
+			case <-githubStarted:
+			case <-time.After(time.Second):
+				t.Error("GitHub did not run in parallel with Gist")
+			}
+			gistDone.Store(true)
+			_, _ = w.Write([]byte(`{"id":"gist-id","files":{"ip.txt":{"filename":"ip.txt","content":"new","raw_url":"https://raw.test/ip.txt"}}}`))
 		case strings.Contains(r.URL.Path, "/sendMessage"):
-			telegramAfterTargets.Store(cloudflareDone.Load() && githubDone.Load())
+			telegramAfterTargets.Store(cloudflareDone.Load() && githubDone.Load() && gistDone.Load())
 			_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
@@ -60,6 +89,7 @@ func TestCoordinatorRunsCloudflareAndGitHubBeforeTelegram(t *testing.T) {
 	settings.Request.MaxRetries = 0
 	settings.Cloudflare = CloudflareSettings{Enabled: true, APIToken: "cf", ZoneID: "zone", RecordName: "cf.example.com", RecordType: "A", TTL: 60}
 	settings.GitHub = GitHubSettings{Enabled: true, Token: "gh", Owner: "owner", Repository: "repo", Branch: "main", Path: "ip.txt"}
+	settings.Gist = GistSettings{Enabled: true, Token: "gist", GistID: "gist-id", Filename: "ip.txt"}
 	settings.Telegram = TelegramSettings{Enabled: true, BotToken: "tg", ChatID: "chat", ContentMode: "summary"}
 
 	updates := make(chan Update, 16)
@@ -69,7 +99,7 @@ func TestCoordinatorRunsCloudflareAndGitHubBeforeTelegram(t *testing.T) {
 	}
 	terminal := map[string]model.PublicationResult{}
 	deadline := time.After(2 * time.Second)
-	for len(terminal) < 3 {
+	for len(terminal) < 4 {
 		select {
 		case update := <-updates:
 			if update.Result.State == "succeeded" || update.Result.State == "failed" || update.Result.State == "skipped" {
@@ -80,7 +110,7 @@ func TestCoordinatorRunsCloudflareAndGitHubBeforeTelegram(t *testing.T) {
 		}
 	}
 	if !telegramAfterTargets.Load() {
-		t.Fatal("telegram ran before Cloudflare and GitHub completed")
+		t.Fatal("telegram ran before Cloudflare, GitHub and Gist completed")
 	}
 }
 
