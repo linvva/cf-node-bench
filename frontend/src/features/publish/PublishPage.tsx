@@ -160,7 +160,22 @@ function TargetHeading({icon,title,enabled,status,onEnabled}:{icon:React.ReactNo
 export function PublicationStatus({result}:{result:PublicationResult}){
   const text={queued:"等待发布",running:"正在发布",succeeded:"发布成功",failed:"发布失败",skipped:"已跳过"}[result.state];
   const description=`${text}${result.items>0?` · ${result.items} 条`:""}${result.message?` · ${result.message}`:""}`;
-  return <span className={`publication-state ${result.state}`}><span className="publication-state-text" title={result.message}>{description}</span>{result.url&&<a className="publication-raw-link" href={result.url} target="_blank" rel="noreferrer" aria-label="打开 Gist Raw 文件" onClick={event=>{if(window.runtime?.BrowserOpenURL){event.preventDefault();window.runtime.BrowserOpenURL(result.url!);}}}><ExternalLink size={11}/>Raw</a>}</span>;
+  const copyRawURL=async()=>{
+    if(!result.url)return;
+    try{await navigator.clipboard.writeText(latestGistRawURL(result.url));toast.success("已复制固定 Raw 地址；它始终指向 Gist 最新内容，更新后可能有短暂缓存");}
+    catch(reason){toast.danger(`复制失败：${String(reason)}`);}
+  };
+  return <span className={`publication-state ${result.state}`}><span className="publication-state-text" title={result.message}>{description}</span>{result.url&&<><a className="publication-raw-link" href={result.url} target="_blank" rel="noreferrer" aria-label="打开 Gist Raw 文件" onClick={event=>{if(window.runtime?.BrowserOpenURL){event.preventDefault();window.runtime.BrowserOpenURL(result.url!);}}}><ExternalLink size={11}/>Raw</a><span title="复制固定 Raw 地址"><Button className="publication-raw-copy" isIconOnly variant="tertiary" aria-label="复制固定 Gist Raw 地址" onPress={()=>void copyRawURL()}><Copy size={11}/></Button></span></>}</span>;
+}
+
+export function latestGistRawURL(rawURL:string){
+  try{
+    const value=new URL(rawURL);
+    if(value.hostname!=="gist.githubusercontent.com")return rawURL;
+    const parts=value.pathname.split("/").filter(Boolean); const rawIndex=parts.indexOf("raw");
+    if(rawIndex<0||parts.length<=rawIndex+2||!/^[0-9a-f]{7,64}$/i.test(parts[rawIndex+1]))return rawURL;
+    parts.splice(rawIndex+1,1); value.pathname=`/${parts.join("/")}`; return value.toString();
+  }catch{return rawURL;}
 }
 
 function TargetActions({target,busy,onTest}:{target:PublishTarget;busy:string;onTest:(target:PublishTarget)=>Promise<void>}){

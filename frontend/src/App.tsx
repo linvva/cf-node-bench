@@ -36,7 +36,7 @@ export function App(){
       </nav>
       <div className="sidebar-foot">
         <span title={`切换主题：${theme}`}><Button isIconOnly variant="tertiary" aria-label={`当前主题：${theme}`} onPress={nextTheme}>{themeIcon}</Button></span>
-        <span>v0.3.2</span>
+        <span>v0.3.3</span>
       </div>
     </aside>
     <main className="main-content">{page==="run"?<RunWorkspace/>:page==="sources"?<SourcesPage/>:page==="publish"?<PublishPage/>:<SettingsPage/>}</main>

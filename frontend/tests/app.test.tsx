@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { toast } from "@heroui/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { ResultsTable } from "../src/features/results/ResultsTable";
@@ -160,10 +161,16 @@ describe("CF Node Bench workspace",()=>{
     retry.mockRestore();
   });
 
-  it("shows the Gist raw URL in publication results",()=>{
-    const summary={runId:"run-gist",startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),state:"completed",results:[],failures:{},publications:[{target:"gist",state:"succeeded",items:2,url:"https://raw.test/ip.txt",message:"Gist 文件已更新"}]} as RunSummary;
+  it("copies a stable latest-content URL for Gist results",async()=>{
+    const rawURL="https://gist.githubusercontent.com/linvva/abc123/raw/1234567890abcdef1234567890abcdef12345678/ip.txt";
+    const clipboard=vi.spyOn(navigator.clipboard,"writeText"); const success=vi.spyOn(toast,"success");
+    const summary={runId:"run-gist",startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),state:"completed",results:[],failures:{},publications:[{target:"gist",state:"succeeded",items:2,url:rawURL,message:"Gist 文件已更新"}]} as RunSummary;
     render(<ResultsTable summary={summary}/>);
-    expect(screen.getByRole("link",{name:"打开 Gist Raw 文件"})).toHaveAttribute("href","https://raw.test/ip.txt");
+    expect(screen.getByRole("link",{name:"打开 Gist Raw 文件"})).toHaveAttribute("href",rawURL);
+    fireEvent.click(screen.getByRole("button",{name:"复制固定 Gist Raw 地址"}));
+    await waitFor(()=>expect(clipboard).toHaveBeenCalledWith("https://gist.githubusercontent.com/linvva/abc123/raw/ip.txt"));
+    expect(success).toHaveBeenCalledWith("已复制固定 Raw 地址；它始终指向 Gist 最新内容，更新后可能有短暂缓存");
     expect(screen.getByText("Gist")).toBeInTheDocument();
+    clipboard.mockRestore(); success.mockRestore();
   });
 });

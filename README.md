@@ -37,7 +37,7 @@ IP:PORT#国家|HTTP44ms|186Mbps
 - Cloudflare `A`：默认模式，只发布端口为 443 的 IPv4，记录内容为纯 IP；`Proxied` 只在此模式生效。
 - Cloudflare `TXT`：发布全部最终节点，每个节点使用上述共享格式。
 - GitHub 仓库：通过 Contents API 创建或更新指定分支中的文件；内容没有变化时不会产生新提交。
-- GitHub Gist：使用独立 Token 更新用户预先创建的 Gist 中的指定文件，并在结果页提供 Raw 链接。内容没有变化时不发送更新请求；目标文件不存在时会新增，Gist 中的其他文件不会被修改或删除。更改文件名不会删除旧文件。应用不负责创建 Gist 或改变其可见性；“测试连接”只验证 Token 和 Gist 可访问，不执行写操作，写权限会在实际发布时验证。
+- GitHub Gist：使用独立 Token 更新用户预先创建的 Gist 中的指定文件，并在结果页提供当前版本 Raw 链接和固定地址复制。固定地址始终指向最新内容，更新后可能有短暂缓存。内容没有变化时不发送更新请求；目标文件不存在时会新增，Gist 中的其他文件不会被修改或删除。更改文件名不会删除旧文件。应用不负责创建 Gist 或改变其可见性；“测试连接”只验证 Token 和 Gist 可访问，不执行写操作，写权限会在实际发布时验证。
 - Telegram“仅汇总”：发送测速耗时、通过节点数及 Cloudflare、GitHub 仓库、Gist 发布状态，不包含 IP。
 - Telegram“汇总与节点列表”：先发相同汇总，再分段发送全部最终节点。
 - Telegram 默认由应用直连 Bot API。如果本地网络无法访问 Telegram，可选择“专属中继”，点击发布页中的“部署 Worker”即可查看完整引导、内置 `worker.js` 并一键复制；仓库文件位于 [`deploy/telegram-relay/worker.js`](deploy/telegram-relay/worker.js)，更多说明见[专属中继部署文档](deploy/telegram-relay/README.md)。“测试连接”只通过中继调用 `getChat`，不会发送测试消息。
@@ -106,8 +106,8 @@ wails build -tags webkit2_41
 推送以 `v` 开头的版本 Tag 会触发 `.github/workflows/release.yml`。流水线先运行 Go 与前端检查，再并行构建 Windows x64、Linux x64 和 macOS Universal 免安装压缩包，最后创建 GitHub Release 并生成 SHA-256 校验文件。
 
 ```bash
-git tag -a v0.3.1 -m "v0.3.1"
-git push origin v0.3.1
+git tag -a v0.3.3 -m "v0.3.3"
+git push origin v0.3.3
 ```
 
 ## 项目结构
