@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,6 +17,8 @@ import (
 )
 
 const speedHost = "speed.cloudflare.com"
+
+var errRejectedRedirect = errors.New("下载测速重定向被拒绝")
 
 type HTTPSProber struct {
 	ConnectTimeout time.Duration
@@ -74,9 +77,10 @@ func (p HTTPSProber) client(candidate model.Candidate) *http.Client {
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return dialer.DialContext(ctx, network, address)
 		},
-		TLSClientConfig:     &tls.Config{ServerName: speedHost, RootCAs: p.RootCAs, MinVersion: tls.VersionTLS12},
+		TLSClientConfig:     &tls.Config{RootCAs: p.RootCAs, MinVersion: tls.VersionTLS12},
 		TLSHandshakeTimeout: p.ConnectTimeout,
 		DisableKeepAlives:   true,
+		DisableCompression:  true,
 	}
 	return &http.Client{Transport: transport}
 }
@@ -87,24 +91,47 @@ type BandwidthProber struct {
 	MaxBytes       int64
 	RootCAs        *x509.CertPool
 	Path           string
+	URL            string
 }
 
 func (p BandwidthProber) Probe(ctx context.Context, candidate model.Candidate) model.BandwidthStats {
 	testCtx, cancel := context.WithTimeout(ctx, p.TotalTimeout)
 	defer cancel()
-	path := p.Path
-	if path == "" {
-		path = fmt.Sprintf("/__down?bytes=%d", p.MaxBytes)
+	targetURL := p.URL
+	if targetURL == "" {
+		path := p.Path
+		if path == "" {
+			path = fmt.Sprintf("/__down?bytes=%d", p.MaxBytes)
+		}
+		targetURL = "https://" + speedHost + path
 	}
 	started := time.Now()
 	var firstByte time.Time
-	req, _ := http.NewRequestWithContext(testCtx, http.MethodGet, "https://"+speedHost+path, nil)
-	req.Host = speedHost
+	req, err := http.NewRequestWithContext(testCtx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return model.BandwidthStats{Failure: model.FailureDownload}
+	}
+	req.Header.Set("Accept-Encoding", "identity")
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
 		GotFirstResponseByte: func() { firstByte = time.Now() },
 	}))
-	resp, err := (HTTPSProber{ConnectTimeout: p.ConnectTimeout, RootCAs: p.RootCAs}).client(candidate).Do(req)
+	client := (HTTPSProber{ConnectTimeout: p.ConnectTimeout, RootCAs: p.RootCAs}).client(candidate)
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 ||
+			req.URL.Scheme != "https" ||
+			req.URL.Hostname() == "" ||
+			req.URL.User != nil ||
+			req.URL.Fragment != "" ||
+			req.URL.RawFragment != "" {
+			return errRejectedRedirect
+		}
+		return nil
+	}
+	resp, err := client.Do(req)
 	if err != nil {
+		if errors.Is(err, errRejectedRedirect) {
+			return model.BandwidthStats{Failure: model.FailureDownload}
+		}
 		return model.BandwidthStats{Failure: classify(testCtx, err)}
 	}
 	defer resp.Body.Close()

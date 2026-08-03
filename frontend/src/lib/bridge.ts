@@ -1,4 +1,5 @@
 import type { Bootstrap, FailureReason, HTTPSource, PublicationResult, PublicationUpdate, PublishCredentialTarget, PublishSaveRequest, PublishSettingsView, PublishTarget, RunProgress, RunSummary, Settings, StageProgress } from "../types";
+import { DEFAULT_BANDWIDTH_TEST_URL } from "./bandwidthTestUrls";
 
 type Handler<T> = (value: T) => void;
 
@@ -18,7 +19,7 @@ let mockRunId = "";
 let mockStartedAt = "";
 let mockCompleted = 0;
 
-const defaultSettings: Settings = { tcpConcurrency:64, httpsConcurrency:16, bandwidthConcurrency:3, connectTimeoutMs:1200, requestTimeoutMs:4000, bandwidthTimeoutMs:12000, sourceTimeoutMs:10000, sourceRetries:2, tcpProbeCount:3, httpsProbeCount:3, tcpMinSuccessRate:2/3, httpsMinSuccessRate:2/3, tcpCandidateCount:150, bandwidthCandidates:30, finalResultCount:15, maxDownloadBytes:20971520, allowedPorts:[443,8443,2053,2083,2087,2096], allowedCountries:[], blockedCountries:[] };
+const defaultSettings: Settings = { tcpConcurrency:64, httpsConcurrency:16, bandwidthConcurrency:3, connectTimeoutMs:1200, requestTimeoutMs:4000, bandwidthTimeoutMs:12000, sourceTimeoutMs:10000, sourceRetries:2, tcpProbeCount:3, httpsProbeCount:3, tcpMinSuccessRate:2/3, httpsMinSuccessRate:2/3, tcpCandidateCount:150, bandwidthCandidates:30, finalResultCount:15, maxDownloadBytes:20971520, bandwidthTestUrl:DEFAULT_BANDWIDTH_TEST_URL, allowedPorts:[443,8443,2053,2083,2087,2096], allowedCountries:[], blockedCountries:[] };
 export const defaultPublishSettings: PublishSettingsView = {
   output:{country:true,tcpP95:false,httpLatency:true,bandwidth:true},
   request:{timeoutMs:10000,maxRetries:2,retryDelayMs:1000},

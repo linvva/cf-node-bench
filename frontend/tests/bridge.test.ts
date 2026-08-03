@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeBootstrap, normalizeProgress, normalizeSummary } from "../src/lib/bridge";
+import { DEFAULT_BANDWIDTH_TEST_URL } from "../src/lib/bandwidthTestUrls";
 import type { Bootstrap, RunProgress, RunSummary } from "../src/types";
 
 describe("Wails bridge normalization",()=>{
@@ -11,6 +12,7 @@ describe("Wails bridge normalization",()=>{
     expect(value.settings.allowedPorts).toEqual([]);
     expect(value.settings.allowedCountries).toEqual([]);
     expect(value.settings.blockedCountries).toEqual([]);
+    expect(value.settings.bandwidthTestUrl).toBe(DEFAULT_BANDWIDTH_TEST_URL);
     expect(value.sources).toEqual([]);
     expect(value.history[0].results).toEqual([]);
     expect(value.history[0].failures).toEqual({});

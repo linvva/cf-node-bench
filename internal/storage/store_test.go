@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/linvva/cf-node-bench/internal/config"
 	"github.com/linvva/cf-node-bench/internal/model"
 	"github.com/linvva/cf-node-bench/internal/publish"
 	"github.com/linvva/cf-node-bench/internal/source"
@@ -63,6 +64,24 @@ func TestOpenNormalizesLegacyNullCollections(t *testing.T) {
 	}
 	if settings.SourceTimeoutMS == 0 || settings.BlockedCountries == nil {
 		t.Fatalf("new defaults were not merged into legacy settings: %+v", settings)
+	}
+	if settings.BandwidthTestURL != config.DefaultBandwidthTestURL {
+		t.Fatalf("legacy bandwidth URL = %q", settings.BandwidthTestURL)
+	}
+}
+
+func TestSaveSettingsNormalizesBandwidthURL(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := store.Settings()
+	settings.BandwidthTestURL = "  https://downloads.example.test/file.bin  "
+	if err := store.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Settings().BandwidthTestURL; got != "https://downloads.example.test/file.bin" {
+		t.Fatalf("saved bandwidth URL = %q", got)
 	}
 }
 

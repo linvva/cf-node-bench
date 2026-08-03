@@ -49,7 +49,7 @@ func NewApp(store *storage.Store) *App {
 		Fetcher:   newTrackingFetcher(store, settings),
 		TCP:       probe.TCPProber{Timeout: settings.ConnectTimeout()},
 		HTTPS:     probe.HTTPSProber{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout()},
-		Bandwidth: probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes},
+		Bandwidth: probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.BandwidthTestURL},
 	}}}
 	app.queue = publish.NewCoordinator(app.publish, app.handlePublishUpdate)
 	return app
@@ -151,7 +151,7 @@ func (a *App) StartRun() (string, error) {
 	a.engine.Dependencies.Fetcher = newTrackingFetcher(a.store, settings)
 	a.engine.Dependencies.TCP = probe.TCPProber{Timeout: settings.ConnectTimeout()}
 	a.engine.Dependencies.HTTPS = probe.HTTPSProber{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout()}
-	a.engine.Dependencies.Bandwidth = probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes}
+	a.engine.Dependencies.Bandwidth = probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.BandwidthTestURL}
 	a.mu.Unlock()
 	return a.manager.Start(a.ctx, a.engine, settings, a.store.Sources(), func(progress model.RunProgress) {
 		runtime.EventsEmit(a.ctx, "run:progress", progress)

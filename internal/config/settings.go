@@ -2,10 +2,13 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
 )
+
+const DefaultBandwidthTestURL = "https://speed.cloudflare.com/__down?bytes=99999999"
 
 type Settings struct {
 	TCPConcurrency       int      `json:"tcpConcurrency"`
@@ -24,6 +27,7 @@ type Settings struct {
 	BandwidthCandidates  int      `json:"bandwidthCandidates"`
 	FinalResultCount     int      `json:"finalResultCount"`
 	MaxDownloadBytes     int64    `json:"maxDownloadBytes"`
+	BandwidthTestURL     string   `json:"bandwidthTestUrl"`
 	AllowedPorts         []int    `json:"allowedPorts"`
 	AllowedCountries     []string `json:"allowedCountries"`
 	BlockedCountries     []string `json:"blockedCountries"`
@@ -39,6 +43,7 @@ func DefaultSettings() Settings {
 		TCPMinSuccessRate: 2.0 / 3.0, HTTPSMinSuccessRate: 2.0 / 3.0,
 		TCPCandidateCount: 150, BandwidthCandidates: 30,
 		FinalResultCount: 15, MaxDownloadBytes: 20 * 1024 * 1024,
+		BandwidthTestURL: DefaultBandwidthTestURL,
 		AllowedPorts:     []int{443, 8443, 2053, 2083, 2087, 2096},
 		AllowedCountries: []string{}, BlockedCountries: []string{},
 	}
@@ -50,6 +55,13 @@ func (s *Settings) MigrateLegacy() {
 		s.HTTPSProbeCount = s.LegacyProbeCount
 		s.LegacyProbeCount = 0
 	}
+	if strings.TrimSpace(s.BandwidthTestURL) == "" {
+		s.BandwidthTestURL = DefaultBandwidthTestURL
+	}
+}
+
+func (s *Settings) Normalize() {
+	s.BandwidthTestURL = strings.TrimSpace(s.BandwidthTestURL)
 }
 
 func (s Settings) Validate() error {
@@ -72,6 +84,9 @@ func (s Settings) Validate() error {
 	}
 	if s.MaxDownloadBytes < 64*1024 || s.MaxDownloadBytes > 1024*1024*1024 {
 		return fmt.Errorf("最大下载字节数必须在 64 KiB 到 1 GiB 之间")
+	}
+	if err := validateBandwidthTestURL(s.BandwidthTestURL); err != nil {
+		return err
 	}
 	if s.TCPMinSuccessRate < 0.6 || s.TCPMinSuccessRate > 1 {
 		return fmt.Errorf("TCP 最低成功率必须在 60%% 到 100%% 之间")
@@ -100,6 +115,23 @@ func (s Settings) Validate() error {
 		if slices.ContainsFunc(s.BlockedCountries, func(blocked string) bool { return strings.EqualFold(allowed, blocked) }) {
 			return fmt.Errorf("国家 %s 不能同时出现在允许和排除列表", strings.ToUpper(allowed))
 		}
+	}
+	return nil
+}
+
+func validateBandwidthTestURL(raw string) error {
+	if raw == "" {
+		return fmt.Errorf("下载测速地址不能为空")
+	}
+	target, err := url.Parse(raw)
+	if err != nil || target.Scheme != "https" || target.Host == "" || target.Hostname() == "" || target.Opaque != "" {
+		return fmt.Errorf("下载测速地址必须是完整的 HTTPS URL")
+	}
+	if target.User != nil {
+		return fmt.Errorf("下载测速地址不能包含用户名或密码")
+	}
+	if target.Fragment != "" || target.RawFragment != "" {
+		return fmt.Errorf("下载测速地址不能包含片段")
 	}
 	return nil
 }

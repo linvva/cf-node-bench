@@ -19,12 +19,14 @@ CF Node Bench 是一个跨平台 Cloudflare 候选 IP 测速工具。它在应�
 ## 使用方法
 
 1. 打开“数据源”，确认至少启用了一个 HTTP 数据源。内置示例可以修改或删除，也可以添加自己的地址。数据源支持 `IPv4:port#国家代码`、`IPv4:port`、裸 IPv4、空白分隔文本，以及包含 `ip`/`host`、`port`、`country`/`cc` 的 JSON。
-2. 打开“设置”，按当前设备和网络调整并发、超时、探测次数、候选池和最大下载量。端口或允许国家为空表示不限；排除国家始终优先于允许国家。
+2. 打开“设置”，按当前设备和网络调整并发、超时、探测次数、候选池、下载测速地址和最大下载量。端口或允许国家为空表示不限；排除国家始终优先于允许国家。
 3. 回到“测速工作台”并点击“开始测速”。界面会持续显示数据源、解析/过滤、TCP、HTTPS、带宽和排序阶段的输入、通过、失败、耗时及失败原因；测速过程中可以随时取消。
 4. 完成后可在结果表格中排序、筛选、选择、复制或导出。点击任意节点可查看 TCP、HTTPS、带宽和各部分得分明细。
 5. 如需自动分发结果，打开“发布”配置 Cloudflare、GitHub 仓库、GitHub Gist 或 Telegram。各目标相互独立，可以同时启用。保存后，每次成功完成测速都会在后台发布；取消测速不会发布，发布失败也不会改变测速结果。结果表格会显示各目标状态并允许手动重试。
 
 HTTPS 探测通过候选 `IP:port` 建立连接，但 TLS SNI 和 HTTP Host 均使用 `speed.cloudflare.com` 并正常验证证书。TCP 和 HTTPS 成功率是硬门槛，低可用节点不会仅凭高带宽进入最终排名。
+
+带宽阶段同样连接候选 `IP:port`，但 TLS SNI、HTTP Host、路径和查询参数来自设置中的下载测速 URL。地址必须使用 HTTPS、能通过待测 Cloudflare CDN 节点访问并直接返回足够大的内容；本地“最大下载量”仍是实际读取上限。应用内置 Cloudflare 官方、Parallels 和 OpenBSD 三个候选，也允许输入自建地址。第三方地址可能限速、迁移或失效，稳定使用时应优先选择官方接口或自己的 Cloudflare 地址。候选选择参考 [Cloudflare 官方测速实现](https://github.com/cloudflare/speedtest) 与 [CloudflareSpeedTest 下载测速地址讨论](https://github.com/XIU2/CloudflareSpeedTest/discussions/490)。
 
 ## 发布结果
 
@@ -54,7 +56,7 @@ Telegram 中继必须部署在用户自己的账户中并仅供本人使用。Bo
 
 `data.json` 使用原子写入并设置为当前用户可读写的 `0600` 权限；Cloudflare、GitHub 仓库、Gist、Telegram Bot Token 和中继访问密钥均以明文保存，但不会返回给前端、写入测速历史或错误日志。发布页中凭据留空表示保留原值，必须点击对应的清除按钮才能删除。
 
-测速会访问用户配置的数据源以及 Cloudflare 的 `speed.cloudflare.com`；启用发布后还会访问相应官方 API。所有 Go HTTP Transport 均显式禁用系统和环境代理；中继模式是应用直连用户配置的 Worker URL，不会启用系统代理。结果来自当前运行设备的真实网络环境；浏览器前端预览只使用模拟桥接，不执行真实网络探测或外部发布。
+测速会访问用户配置的数据源、用于 HTTPS 探测的 `speed.cloudflare.com` 以及用户选择的下载测速 URL；启用发布后还会访问相应官方 API。所有 Go HTTP Transport 均显式禁用系统和环境代理；中继模式是应用直连用户配置的 Worker URL，不会启用系统代理。结果来自当前运行设备的真实网络环境；浏览器前端预览只使用模拟桥接，不执行真实网络探测或外部发布。
 
 ## 技术栈
 
@@ -106,8 +108,8 @@ wails build -tags webkit2_41
 推送以 `v` 开头的版本 Tag 会触发 `.github/workflows/release.yml`。流水线先运行 Go 与前端检查，再并行构建 Windows x64、Linux x64 和 macOS Universal 免安装压缩包，最后创建 GitHub Release 并生成 SHA-256 校验文件。
 
 ```bash
-git tag -a v0.3.3 -m "v0.3.3"
-git push origin v0.3.3
+git tag -a v0.4.0 -m "v0.4.0"
+git push origin v0.4.0
 ```
 
 ## 项目结构

@@ -41,6 +41,7 @@ func Open(path string) (*Store, error) {
 		}
 	}
 	store.data.Settings.MigrateLegacy()
+	store.data.Settings.Normalize()
 	if err := store.data.Settings.Validate(); err != nil {
 		store.data.Settings = config.DefaultSettings()
 	}
@@ -124,6 +125,7 @@ func (s *Store) PublishSettingsView() publish.SettingsView {
 }
 
 func (s *Store) SaveSettings(settings config.Settings) error {
+	settings.Normalize()
 	if err := settings.Validate(); err != nil {
 		return err
 	}

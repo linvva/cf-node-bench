@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { ResultsTable } from "../src/features/results/ResultsTable";
 import { countryOptions } from "../src/features/settings/countries";
-import { validateSettings } from "../src/features/settings/SettingsPage";
+import { validateBandwidthTestURL, validateSettings } from "../src/features/settings/SettingsPage";
+import { bandwidthTestURLPresets, DEFAULT_BANDWIDTH_TEST_URL } from "../src/lib/bandwidthTestUrls";
 import { actions, getAppState } from "../src/store";
 import type { RunSummary } from "../src/types";
 
@@ -46,6 +47,29 @@ describe("CF Node Bench workspace",()=>{
     expect(countryOptions.find((country)=>country.code==="CN")?.name).toContain("中国");
     const settings={...getAppState().settings,allowedCountries:["US"],blockedCountries:["US"]};
     expect(validateSettings(settings)).toBe("国家 US 不能同时出现在允许和排除列表");
+  });
+
+  it("selects a bandwidth preset and saves a custom HTTPS URL",async()=>{
+    const save=vi.spyOn(actions,"saveSettings").mockResolvedValueOnce();
+    render(<App/>); await screen.findByRole("heading",{name:"测速工作台"});
+    fireEvent.click(screen.getByRole("button",{name:"设置"}));
+    const input=await screen.findByLabelText("下载测速 URL");
+    expect(input).toHaveValue(DEFAULT_BANDWIDTH_TEST_URL);
+    fireEvent.click(screen.getByRole("button",{name:/常用地址/}));
+    fireEvent.click(await screen.findByRole("option",{name:/Parallels.*318 MiB/}));
+    expect(input).toHaveValue(bandwidthTestURLPresets[1].url);
+    fireEvent.change(input,{target:{value:"  https://downloads.example.test/custom.bin?token=value  "}});
+    fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
+    await waitFor(()=>expect(save).toHaveBeenCalledWith(expect.objectContaining({bandwidthTestUrl:"https://downloads.example.test/custom.bin?token=value"})));
+    save.mockRestore();
+  });
+
+  it("validates bandwidth test URLs before saving",()=>{
+    expect(validateBandwidthTestURL("")).toBe("下载测速地址不能为空");
+    expect(validateBandwidthTestURL("http://downloads.example.test/file.bin")).toBe("下载测速地址必须是完整的 HTTPS URL");
+    expect(validateBandwidthTestURL("https://user:secret@downloads.example.test/file.bin")).toBe("下载测速地址不能包含用户名或密码");
+    expect(validateBandwidthTestURL("https://downloads.example.test/file.bin#part")).toBe("下载测速地址不能包含片段");
+    expect(validateBandwidthTestURL("https://downloads.example.test/file.bin?token=value")).toBe("");
   });
 
   it("adds an editable HTTP source",async()=>{

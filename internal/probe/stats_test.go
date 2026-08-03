@@ -54,6 +54,65 @@ func TestHTTPSAndBandwidthWithVerifiedTLS(t *testing.T) {
 	}
 }
 
+func TestBandwidthUsesConfiguredURLAcrossHTTPSRedirect(t *testing.T) {
+	const firstHost = "downloads.example.test"
+	const redirectedHost = "cdn.example.test"
+	var requests []string
+	server, roots := speedServerForHosts(t, []string{firstHost, redirectedHost}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Host+r.URL.RequestURI()+"#"+r.TLS.ServerName)
+		if r.Host == firstHost {
+			http.Redirect(w, r, "https://"+redirectedHost+"/asset.bin?source=redirect", http.StatusFound)
+			return
+		}
+		if encoding := r.Header.Get("Accept-Encoding"); encoding != "identity" {
+			t.Errorf("Accept-Encoding = %q", encoding)
+		}
+		_, _ = w.Write(make([]byte, 256*1024))
+	}))
+	defer server.Close()
+	stats := (BandwidthProber{
+		ConnectTimeout: time.Second,
+		TotalTimeout:   time.Second,
+		MaxBytes:       64 * 1024,
+		RootCAs:        roots,
+		URL:            "https://" + firstHost + "/start?token=one",
+	}).Probe(t.Context(), candidateFor(t, server.Listener.Addr()))
+	if stats.Failure != "" || stats.Bytes != 64*1024 {
+		t.Fatalf("bandwidth stats: %+v", stats)
+	}
+	want := []string{
+		firstHost + "/start?token=one#" + firstHost,
+		redirectedHost + "/asset.bin?source=redirect#" + redirectedHost,
+	}
+	if len(requests) != len(want) {
+		t.Fatalf("requests = %v", requests)
+	}
+	for index := range want {
+		if requests[index] != want[index] {
+			t.Fatalf("request %d = %q, want %q", index, requests[index], want[index])
+		}
+	}
+}
+
+func TestBandwidthRejectsUnsafeRedirect(t *testing.T) {
+	tests := map[string]string{
+		"HTTP downgrade": "http://speed.cloudflare.com/insecure",
+		"user info":      "https://user:secret@speed.cloudflare.com/private",
+	}
+	for name, redirectURL := range tests {
+		t.Run(name, func(t *testing.T) {
+			server, roots := speedServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, redirectURL, http.StatusFound)
+			}))
+			defer server.Close()
+			stats := (BandwidthProber{ConnectTimeout: time.Second, TotalTimeout: time.Second, MaxBytes: 64 * 1024, RootCAs: roots}).Probe(t.Context(), candidateFor(t, server.Listener.Addr()))
+			if stats.Failure != model.FailureDownload {
+				t.Fatalf("failure = %q", stats.Failure)
+			}
+		})
+	}
+}
+
 func TestHTTPSClientDoesNotUseProxy(t *testing.T) {
 	client := (HTTPSProber{ConnectTimeout: time.Second}).client(model.Candidate{IP: "127.0.0.1", Port: 443})
 	transport, ok := client.Transport.(*http.Transport)
@@ -97,12 +156,16 @@ func TestBandwidthCancellationStopsRead(t *testing.T) {
 }
 
 func speedServer(t *testing.T, handler http.Handler) (*httptest.Server, *x509.CertPool) {
+	return speedServerForHosts(t, []string{speedHost}, handler)
+}
+
+func speedServerForHosts(t *testing.T, hosts []string, handler http.Handler) (*httptest.Server, *x509.CertPool) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
-	template := x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: speedHost}, DNSNames: []string{speedHost}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IsCA: true, BasicConstraintsValid: true}
+	template := x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: hosts[0]}, DNSNames: hosts, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IsCA: true, BasicConstraintsValid: true}
 	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)

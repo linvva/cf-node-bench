@@ -59,6 +59,12 @@ test("settings and sources fit without overlap",async({page},testInfo)=>{
   await page.goto("/");
   await page.getByRole("button",{name:"设置"}).click();
   await expect(page.getByRole("heading",{name:"测速设置"})).toBeVisible();
+  await expect(page.getByLabel("下载测速 URL")).toHaveValue("https://speed.cloudflare.com/__down?bytes=99999999");
+  await page.getByRole("button",{name:/常用地址/}).click();
+  await page.getByRole("option",{name:/OpenBSD 7\.9.*195 MiB/}).click();
+  await expect(page.getByLabel("下载测速 URL")).toHaveValue("https://cloudflare.cdn.openbsd.org/pub/OpenBSD/7.9/src.tar.gz");
+  await page.getByLabel("下载测速 URL").fill("https://downloads.example.test/custom.bin");
+  await expect(page.getByRole("button",{name:/常用地址/})).toContainText("自定义地址");
   const saveSettings=page.getByRole("button",{name:/保存设置/});
   const saveTop=(await saveSettings.boundingBox())!.y;
   await page.getByLabel("允许国家选择器").click();

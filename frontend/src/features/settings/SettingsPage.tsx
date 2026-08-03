@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Button, Input, toast } from "@heroui/react";
+import { Button, Heading, Input, Label, ListBox, Select, toast } from "@heroui/react";
 import { Save } from "lucide-react";
+import { bandwidthTestURLPresets } from "../../lib/bandwidthTestUrls";
 import { actions, useAppStore } from "../../store";
 import type { Settings } from "../../types";
 import { CountryPicker } from "./CountryPicker";
@@ -35,10 +36,12 @@ export function SettingsPage() {
 
   const number = (key: IntegerSetting, value: string) => setForm((current) => ({ ...current, [key]: Number(value) }));
   const save = async () => {
-    const message = validateSettings(form);
+    const normalized = { ...form, bandwidthTestUrl: form.bandwidthTestUrl.trim() };
+    const message = validateSettings(normalized);
     setError(message);
     if (message) return;
-    await actions.saveSettings(form);
+    setForm(normalized);
+    await actions.saveSettings(normalized);
     toast.success("设置已保存");
   };
 
@@ -55,10 +58,14 @@ export function SettingsPage() {
           <Field label="TCP 候选池" value={form.tcpCandidateCount} min={1} max={5000} onChange={(value) => number("tcpCandidateCount", value)} />
           <Field label="带宽目标通过数" value={form.bandwidthCandidates} min={1} max={500} onChange={(value) => number("bandwidthCandidates", value)} />
           <Field label="最终结果数" value={form.finalResultCount} min={1} max={100} onChange={(value) => number("finalResultCount", value)} />
-          <MiBField value={form.maxDownloadBytes} onChange={(value) => setForm((current) => ({ ...current, maxDownloadBytes: value }))} />
           <div className="field field-wide"><label>允许端口</label><Input aria-label="允许端口" value={form.allowedPorts.join(", ")} onChange={(event) => setForm((current) => ({ ...current, allowedPorts: event.target.value.split(/[,\s]+/).filter(Boolean).map(Number) }))} /><small>逗号分隔；留空表示不限</small></div>
           <CountryPicker label="允许国家" value={form.allowedCountries} description="留空表示不限；支持按中文名称或代码搜索" onChange={(value) => setForm((current) => ({ ...current, allowedCountries: value }))} />
           <CountryPicker label="排除国家" value={form.blockedCountries} description="仅匹配数据源提供的国家标签；命中后在 TCP 前排除并显示数量" onChange={(value) => setForm((current) => ({ ...current, blockedCountries: value }))} />
+        </SettingsSection>
+        <SettingsSection title="下载测速" description="所选地址用于带宽阶段，下载量仍受本地上限控制。">
+          <BandwidthTestPresetField value={form.bandwidthTestUrl} onChange={(value) => setForm((current) => ({ ...current, bandwidthTestUrl: value }))} />
+          <MiBField value={form.maxDownloadBytes} onChange={(value) => setForm((current) => ({ ...current, maxDownloadBytes: value }))} />
+          <div className="field field-wide"><label>下载测速 URL</label><Input aria-label="下载测速 URL" value={form.bandwidthTestUrl} placeholder="https://example.com/file.bin" onChange={(event) => setForm((current) => ({ ...current, bandwidthTestUrl: event.target.value }))} /></div>
         </SettingsSection>
       </div>
       <div className="settings-column">
@@ -88,6 +95,8 @@ export function validateSettings(form: Settings) {
     if (form.tcpMinSuccessRate < 0.6 || form.tcpMinSuccessRate > 1) return "TCP 最低成功率必须在 60% 到 100% 之间";
     if (form.httpsMinSuccessRate < 0.6 || form.httpsMinSuccessRate > 1) return "HTTPS 最低成功率必须在 60% 到 100% 之间";
     if (form.maxDownloadBytes < 1048576 || form.maxDownloadBytes > 1073741824) return "最大下载量必须在 1 到 1024 MiB 之间";
+    const bandwidthURLMessage = validateBandwidthTestURL(form.bandwidthTestUrl);
+    if (bandwidthURLMessage) return bandwidthURLMessage;
     if (form.bandwidthCandidates > form.tcpCandidateCount) return "带宽目标通过数不能大于 TCP 候选数";
     if (form.finalResultCount > form.bandwidthCandidates) return "最终结果数不能大于带宽目标通过数";
     if (form.allowedPorts.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) return "端口必须在 1 到 65535 之间";
@@ -95,6 +104,17 @@ export function validateSettings(form: Settings) {
     const blocked = new Set(form.blockedCountries);
     const conflict = form.allowedCountries.find((country) => blocked.has(country));
     if (conflict) return `国家 ${conflict} 不能同时出现在允许和排除列表`;
+    return "";
+}
+
+export function validateBandwidthTestURL(value: string) {
+    const raw = value.trim();
+    if (!raw) return "下载测速地址不能为空";
+    let target: URL;
+    try { target = new URL(raw); } catch { return "下载测速地址必须是完整的 HTTPS URL"; }
+    if (!raw.toLowerCase().startsWith("https://") || target.protocol !== "https:" || !target.hostname) return "下载测速地址必须是完整的 HTTPS URL";
+    if (target.username || target.password) return "下载测速地址不能包含用户名或密码";
+    if (target.hash) return "下载测速地址不能包含片段";
     return "";
 }
 
@@ -113,4 +133,20 @@ function RateField({ label, value, onChange }: { label: string; value: number; o
 
 function MiBField({ value, onChange }: { value: number; onChange: (value: number) => void }) {
   return <div className="field"><label>最大下载量 (MiB)</label><Input type="number" aria-label="最大下载量" value={String(value / 1048576)} min={1} max={1024} onChange={(event) => onChange(Math.round(Number(event.target.value) * 1048576))} /><small>1 – 1024</small></div>;
+}
+
+function BandwidthTestPresetField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const selected = bandwidthTestURLPresets.find((preset) => preset.url === value.trim());
+  return <div className="field bandwidth-url-preset">
+    <Select fullWidth placeholder="自定义地址" value={selected?.id ?? null} variant="secondary" onChange={(key) => {
+      const preset = bandwidthTestURLPresets.find((item) => item.id === String(key));
+      if (preset) onChange(preset.url);
+    }}>
+      <Label>常用地址</Label>
+      <Select.Trigger aria-label="常用测速地址"><Select.Value>{selected?.label ?? "自定义地址"}</Select.Value><Select.Indicator /></Select.Trigger>
+      <Select.Popover><Heading className="sr-only" slot="title">常用测速地址</Heading><ListBox aria-label="常用测速地址候选" items={bandwidthTestURLPresets}>
+        {(preset) => <ListBox.Item id={preset.id} textValue={`${preset.label} ${preset.size}`}><span className="bandwidth-url-option"><strong>{preset.label}</strong><small>{preset.size}</small></span><ListBox.ItemIndicator /></ListBox.Item>}
+      </ListBox></Select.Popover>
+    </Select>
+  </div>;
 }
