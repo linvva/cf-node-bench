@@ -75,7 +75,8 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 		}
 	}
 	candidates = unique(candidates)
-	retainedResults, retainedFailures := prepareRetained(input.Retained, candidates, settings)
+	retainedResults, retainedKeys, retainedFailures := prepareRetained(input.Retained, candidates, settings)
+	candidates = filter(candidates, func(candidate model.Candidate) bool { return !retainedKeys[candidate.Key()] })
 	progress.finish("source", enabledSources, sourcesPassed, enabledSources-sourcesPassed)
 
 	filterStarted := time.Now()
@@ -117,7 +118,7 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 	}
 
 	httpsInitialCount := min(settings.TCPCandidateCount, len(tcpResults))
-	httpsTarget := min(settings.BandwidthCandidates, len(tcpResults))
+	httpsTarget := min(settings.TCPCandidateCount, len(tcpResults))
 	progress.startProbe("https", httpsInitialCount, settings.HTTPSProbeCount)
 	httpsStarted := time.Now()
 	httpsResults := make([]model.ProbeResult, 0, httpsInitialCount)
@@ -315,20 +316,25 @@ func unique(items []model.Candidate) []model.Candidate {
 	return result
 }
 
-func prepareRetained(items []model.ProbeResult, fresh []model.Candidate, settings config.Settings) ([]model.ProbeResult, map[model.FailureReason]int) {
-	freshKeys := make(map[string]bool, len(fresh))
+func prepareRetained(items []model.ProbeResult, fresh []model.Candidate, settings config.Settings) ([]model.ProbeResult, map[string]bool, map[model.FailureReason]int) {
+	freshByKey := make(map[string]model.Candidate, len(fresh))
 	for _, candidate := range fresh {
-		freshKeys[candidate.Key()] = true
+		freshByKey[candidate.Key()] = candidate
 	}
 	seen := make(map[string]bool, len(items))
+	retainedKeys := make(map[string]bool, len(items))
 	prepared := make([]model.ProbeResult, 0, len(items))
 	failures := map[model.FailureReason]int{}
 	for _, result := range items {
 		key := result.Candidate.Key()
-		if freshKeys[key] || seen[key] {
+		if seen[key] {
 			continue
 		}
 		seen[key] = true
+		retainedKeys[key] = true
+		if candidate, ok := freshByKey[key]; ok {
+			result.Candidate = candidate
+		}
 		if !settings.AllowsPort(result.Candidate.Port) {
 			failures[model.FailurePortFiltered]++
 			continue
@@ -348,7 +354,7 @@ func prepareRetained(items []model.ProbeResult, fresh []model.Candidate, setting
 		result.Status = ""
 		prepared = append(prepared, result)
 	}
-	return prepared, failures
+	return prepared, retainedKeys, failures
 }
 
 func cloneFailures(failures map[model.FailureReason]int) map[model.FailureReason]int {

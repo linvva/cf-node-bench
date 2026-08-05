@@ -90,21 +90,26 @@ function mockCandidateAllowed(candidate: Candidate) {
 
 function mockPlan(): StageProgress[] {
   const settings=mockData.settings;
-  const portPassed=mockCandidates.filter(candidate=>settings.allowedPorts.length===0||settings.allowedPorts.includes(candidate.port));
-  const filtered=mockCandidates.filter(mockCandidateAllowed);
-  const portFailed=mockCandidates.length-portPassed.length;
+  const latestCompleted=mockData.history.find(summary=>summary.state==="completed");
+  const retained=settings.retainPreviousResults?(latestCompleted?.results??[]):[];
+  const retainedKeys=new Set(retained.map(result=>`${result.candidate.ip}:${result.candidate.port}`));
+  const freshCandidates=mockCandidates.filter(candidate=>!retainedKeys.has(`${candidate.ip}:${candidate.port}`));
+  const freshByKey=new Map(mockCandidates.map(candidate=>[`${candidate.ip}:${candidate.port}`,candidate]));
+  const portPassed=freshCandidates.filter(candidate=>settings.allowedPorts.length===0||settings.allowedPorts.includes(candidate.port));
+  const filtered=freshCandidates.filter(mockCandidateAllowed);
+  const portFailed=freshCandidates.length-portPassed.length;
   const countryFailed=portPassed.filter(candidate=>!mockCandidateAllowed(candidate)).length;
   const tcpFailed=Math.min(4,filtered.length); const tcpPassed=filtered.length-tcpFailed;
-  const httpsInput=Math.min(tcpPassed,settings.tcpCandidateCount); const httpsFailed=Math.min(2,httpsInput); const httpsPassed=httpsInput-httpsFailed;
-  const freshKeys=new Set(mockCandidates.map(candidate=>`${candidate.ip}:${candidate.port}`));
-  const latestCompleted=mockData.history.find(summary=>summary.state==="completed");
-  const retainedInput=settings.retainPreviousResults?(latestCompleted?.results??[]).filter(result=>!freshKeys.has(`${result.candidate.ip}:${result.candidate.port}`)&&mockCandidateAllowed(result.candidate)&&result.tcp.successRate>=settings.tcpMinSuccessRate).length:0;
+  const httpsInitial=Math.min(tcpPassed,settings.tcpCandidateCount); const httpsFailed=Math.min(2,httpsInitial);
+  const httpsInput=httpsInitial+Math.min(httpsFailed,Math.max(0,tcpPassed-httpsInitial)); const httpsPassed=httpsInput-httpsFailed;
+  const seenRetained=new Set<string>();
+  const retainedInput=retained.filter(result=>{const key=`${result.candidate.ip}:${result.candidate.port}`;if(seenRetained.has(key))return false;seenRetained.add(key);return mockCandidateAllowed(freshByKey.get(key)??result.candidate)&&result.tcp.successRate>=settings.tcpMinSuccessRate;}).length;
   const retainedFailed=Math.min(1,retainedInput); const retainedPassed=retainedInput-retainedFailed;
   const bandwidthInput=Math.min(httpsPassed,settings.bandwidthCandidates)+retainedPassed; const bandwidthFailed=Math.min(1,bandwidthInput);
   const rankingPassed=Math.min(bandwidthInput-bandwidthFailed,settings.finalResultCount);
   return [
     {name:"source",input:mockData.sources.filter(source=>source.enabled).length,passed:mockData.sources.filter(source=>source.enabled).length,failed:0,durationMs:180,state:"completed"},
-    {name:"filter",input:mockCandidates.length+2,passed:filtered.length,failed:2+portFailed+countryFailed,durationMs:24,state:"completed"},
+    {name:"filter",input:freshCandidates.length+2,passed:filtered.length,failed:2+portFailed+countryFailed,durationMs:24,state:"completed"},
     {name:"tcp",input:filtered.length,passed:tcpPassed,failed:tcpFailed,attemptsCompleted:filtered.length*settings.tcpProbeCount,attemptsTotal:filtered.length*settings.tcpProbeCount,durationMs:1480,state:"completed"},
     {name:"https",input:httpsInput,passed:httpsPassed,failed:httpsFailed,attemptsCompleted:httpsInput*settings.httpsProbeCount,attemptsTotal:httpsInput*settings.httpsProbeCount,durationMs:1760,state:"completed"},
     {name:"retained",input:retainedInput,passed:retainedPassed,failed:retainedFailed,attemptsCompleted:retainedInput,attemptsTotal:retainedInput,durationMs:retainedInput?420:0,state:"completed"},
@@ -127,7 +132,7 @@ function mockRunningStage(stage: StageProgress): StageProgress {
 
 function mockFailures(plan: StageProgress[], completed: number): Partial<Record<FailureReason,number>> {
   const failures:Partial<Record<FailureReason,number>>={};
-  if(completed>1){ failures.invalid_ip=2; const portFiltered=plan[1].input-2-mockCandidates.filter(candidate=>mockData.settings.allowedPorts.length===0||mockData.settings.allowedPorts.includes(candidate.port)).length; if(portFiltered)failures.port_filtered=portFiltered; const countryFiltered=plan[1].failed-2-portFiltered; if(countryFiltered)failures.country_filtered=countryFiltered; }
+  if(completed>1){ const retainedKeys=new Set(mockData.settings.retainPreviousResults?(mockData.history.find(summary=>summary.state==="completed")?.results??[]).map(result=>`${result.candidate.ip}:${result.candidate.port}`):[]); const fresh=mockCandidates.filter(candidate=>!retainedKeys.has(`${candidate.ip}:${candidate.port}`)); failures.invalid_ip=2; const portFiltered=fresh.filter(candidate=>mockData.settings.allowedPorts.length>0&&!mockData.settings.allowedPorts.includes(candidate.port)).length; if(portFiltered)failures.port_filtered=portFiltered; const countryFiltered=plan[1].failed-2-portFiltered; if(countryFiltered)failures.country_filtered=countryFiltered; }
   if(completed>2&&plan[2].failed)failures.timeout=plan[2].failed;
   if(completed>3&&plan[3].failed)failures.tls=plan[3].failed;
   if(completed>4&&plan[4].failed)failures.tls=(failures.tls??0)+plan[4].failed;

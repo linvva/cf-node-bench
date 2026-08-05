@@ -185,7 +185,7 @@ func (f selectiveBandwidth) Probe(_ context.Context, candidate model.Candidate) 
 	return model.BandwidthStats{Bytes: 1024, Mbps: 100}
 }
 
-func TestRetainedResultsUseFastPathAndExtraBandwidthQuota(t *testing.T) {
+func TestRetainedResultsTakePriorityAndUseExtraBandwidthQuota(t *testing.T) {
 	settings := config.DefaultSettings()
 	settings.TCPConcurrency = 1
 	settings.HTTPSConcurrency = 1
@@ -219,23 +219,29 @@ func TestRetainedResultsUseFastPathAndExtraBandwidthQuota(t *testing.T) {
 		updates = append(updates, progress)
 	})
 
-	if len(tcpCandidates) != len(fresh) {
+	if len(tcpCandidates) != len(fresh)-1 {
 		t.Fatalf("TCP probed retained candidates: %+v", tcpCandidates)
 	}
 	retainedHTTPSCalls := 0
+	duplicateFastCalls := 0
 	duplicateFullCalls := 0
 	for _, call := range httpsCalls {
 		if call.candidate.Key() == retainedCandidate.Key() && call.attempts == 1 {
 			retainedHTTPSCalls++
 		}
-		if call.candidate.Key() == fresh[0].Key() && call.attempts == settings.HTTPSProbeCount && call.candidate.SourceID == "fresh" {
-			duplicateFullCalls++
+		if call.candidate.Key() == fresh[0].Key() {
+			if call.attempts == 1 && call.candidate.Country == "US" && call.candidate.SourceID == "fresh" {
+				duplicateFastCalls++
+			}
+			if call.attempts == settings.HTTPSProbeCount {
+				duplicateFullCalls++
+			}
 		}
 	}
-	if retainedHTTPSCalls != 1 || duplicateFullCalls != 1 {
+	if retainedHTTPSCalls != 1 || duplicateFastCalls != 1 || duplicateFullCalls != 0 {
 		t.Fatalf("unexpected HTTPS paths: %+v", httpsCalls)
 	}
-	if len(bandwidthCalls) != settings.BandwidthCandidates+1 || bandwidthCalls[0] != retainedCandidate.Key() {
+	if len(bandwidthCalls) != 4 || bandwidthCalls[0] != retainedCandidate.Key() || bandwidthCalls[1] != fresh[0].Key() {
 		t.Fatalf("retained bandwidth was not extra and first: %v", bandwidthCalls)
 	}
 	retainedResult := findResult(summary.Results, retainedCandidate.Key())
@@ -246,7 +252,7 @@ func TestRetainedResultsUseFastPathAndExtraBandwidthQuota(t *testing.T) {
 		t.Fatalf("retained gates were not counted: %+v", summary.Failures)
 	}
 	retainedStage := completedStage(updates, "retained")
-	if retainedStage.Input != 1 || retainedStage.Passed != 1 || retainedStage.Failed != 0 || retainedStage.AttemptsCompleted != 1 || retainedStage.AttemptsTotal != 1 {
+	if retainedStage.Input != 2 || retainedStage.Passed != 2 || retainedStage.Failed != 0 || retainedStage.AttemptsCompleted != 2 || retainedStage.AttemptsTotal != 2 {
 		t.Fatalf("retained progress is inconsistent: %+v", retainedStage)
 	}
 	bandwidthStage := completedStage(updates, "bandwidth")
@@ -315,8 +321,8 @@ func TestHTTPSRefillsFromRemainingTCPCandidates(t *testing.T) {
 	settings.HTTPSConcurrency = 1
 	settings.BandwidthConcurrency = 1
 	settings.TCPCandidateCount = 3
-	settings.BandwidthCandidates = 3
-	settings.FinalResultCount = 3
+	settings.BandwidthCandidates = 1
+	settings.FinalResultCount = 1
 	candidates := []model.Candidate{
 		{AddressType: model.AddressIPv4, IP: "1.1.1.1", Port: 443},
 		{AddressType: model.AddressIPv4, IP: "1.1.1.2", Port: 443},
@@ -339,8 +345,8 @@ func TestHTTPSRefillsFromRemainingTCPCandidates(t *testing.T) {
 		updates = append(updates, progress)
 	})
 
-	if len(summary.Results) != 3 {
-		t.Fatalf("expected 3 successful results after HTTPS refill, got %d", len(summary.Results))
+	if len(summary.Results) != 1 {
+		t.Fatalf("expected the configured bandwidth result after HTTPS refill, got %d", len(summary.Results))
 	}
 	if len(probed) != 5 {
 		t.Fatalf("expected all 5 candidates to be tried while refilling, got %v", probed)

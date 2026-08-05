@@ -24,9 +24,9 @@ CF Node Bench 是一个跨平台 Cloudflare 候选 IP 测速工具。它在应�
 4. 完成后可在结果表格中排序、筛选、选择、复制或导出。点击任意节点可查看 TCP、HTTPS、带宽和各部分得分明细；“下轮复测上次结果”开关控制这些最终节点是否进入下一轮快速复测。
 5. 如需自动分发结果，打开“发布”配置 Cloudflare、GitHub 仓库、GitHub Gist 或 Telegram。各目标相互独立，可以同时启用。保存后，每次成功完成测速都会在后台发布；取消测速不会发布，发布失败也不会改变测速结果。结果表格会显示各目标状态并允许手动重试。
 
-HTTPS 探测通过候选 `IP:port` 建立连接，但 TLS SNI 和 HTTP Host 均使用 `speed.cloudflare.com` 并正常验证证书。TCP 和 HTTPS 成功率是硬门槛，低可用节点不会仅凭高带宽进入最终排名。
+HTTPS 探测通过候选 `IP:port` 建立连接，但 TLS SNI 和 HTTP Host 均使用 `speed.cloudflare.com` 并正常验证证书。TCP 和 HTTPS 成功率是硬门槛，低可用节点不会仅凭高带宽进入最终排名。常规 HTTPS 阶段以“TCP 候选池”为通过目标，失败时会继续从其余 TCP 通过节点补入，直到达到目标或候选耗尽。
 
-上轮结果复测默认开启。最近一次已完成运行的最终节点会复用上轮 TCP 指标，按当前端口、国家和 TCP 门槛过滤后执行一次 HTTPS 复检，再额外执行带宽测试；本轮数据源中已存在的同一 `IP:port` 仍走完整测速流程。保留节点不占“带宽目标通过数”，因此会增加实际下载量；它们使用本轮 HTTPS 和带宽指标与新节点统一排名，一旦复检或下载失败便不会进入下一轮保留集合。取消的运行不会替代最近一次已完成结果。
+上轮结果复测默认开启。最近一次已完成运行的最终节点会优先进入快速复测并从本轮新节点池移除；若数据源仍包含同一 `IP:port`，复测节点会采用本轮国家和来源信息。它们复用上轮 TCP 指标，按当前端口、国家和 TCP 门槛过滤后执行一次 HTTPS 复检，再额外执行带宽测试。保留节点不占“带宽目标通过数”，因此会增加实际下载量；它们使用本轮 HTTPS 和带宽指标与新节点统一排名，一旦复检或下载失败便不会进入下一轮保留集合。取消的运行不会替代最近一次已完成结果。
 
 带宽阶段同样连接候选 `IP:port`，但 TLS SNI、HTTP Host、路径和查询参数来自设置中的下载测速 URL。地址必须使用 HTTPS、能通过待测 Cloudflare CDN 节点访问并直接返回足够大的内容；本地“最大下载量”仍是实际读取上限。应用内置 Cloudflare 官方、Parallels 和 OpenBSD 三个候选，也允许输入自建地址。第三方地址可能限速、迁移或失效，稳定使用时应优先选择官方接口或自己的 Cloudflare 地址。候选选择参考 [Cloudflare 官方测速实现](https://github.com/cloudflare/speedtest) 与 [CloudflareSpeedTest 下载测速地址讨论](https://github.com/XIU2/CloudflareSpeedTest/discussions/490)。
 
@@ -110,8 +110,8 @@ wails build -tags webkit2_41
 推送以 `v` 开头的版本 Tag 会触发 `.github/workflows/release.yml`。流水线先运行 Go 与前端检查，再并行构建 Windows x64、Linux x64 和 macOS Universal 免安装压缩包，最后创建 GitHub Release 并生成 SHA-256 校验文件。
 
 ```bash
-git tag -a v0.5.0 -m "v0.5.0"
-git push origin v0.5.0
+git tag -a v0.5.1 -m "v0.5.1"
+git push origin v0.5.1
 ```
 
 ## 项目结构

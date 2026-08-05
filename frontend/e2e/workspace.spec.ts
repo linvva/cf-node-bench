@@ -60,7 +60,10 @@ test("progress stays responsive while previous results remain visible",async({pa
   await page.waitForTimeout(700);
   await content.evaluate(element=>{element.scrollTop=0;});
   expect(await content.evaluate(element=>element.scrollTop)).toBe(0);
-  await page.getByRole("button",{name:/取消测速/}).click();
+  await expect(page.getByRole("button",{name:/开始测速/})).toBeVisible({timeout:8000});
+  const retainedStage=page.locator(".stage").filter({hasText:"保留复检"});
+  await expect(retainedStage).toContainText("14 通过 · 1 失败");
+  await expect(page.getByLabel("候选路径")).toContainText("15复检输入");
 });
 
 test("settings and sources fit without overlap",async({page},testInfo)=>{
