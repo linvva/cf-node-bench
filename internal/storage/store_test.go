@@ -68,6 +68,9 @@ func TestOpenNormalizesLegacyNullCollections(t *testing.T) {
 	if settings.BandwidthTestURL != config.DefaultBandwidthTestURL {
 		t.Fatalf("legacy bandwidth URL = %q", settings.BandwidthTestURL)
 	}
+	if !settings.RetainPreviousResults {
+		t.Fatal("legacy settings did not enable previous-result retention")
+	}
 }
 
 func TestSaveSettingsNormalizesBandwidthURL(t *testing.T) {
@@ -82,6 +85,50 @@ func TestSaveSettingsNormalizesBandwidthURL(t *testing.T) {
 	}
 	if got := store.Settings().BandwidthTestURL; got != "https://downloads.example.test/file.bin" {
 		t.Fatalf("saved bandwidth URL = %q", got)
+	}
+}
+
+func TestSaveSettingsPreservesDisabledPreviousResultRetention(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.json")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := store.Settings()
+	settings.RetainPreviousResults = false
+	if err := store.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Settings().RetainPreviousResults {
+		t.Fatal("explicitly disabled previous-result retention was not preserved")
+	}
+}
+
+func TestLatestCompletedResultsSkipsCancelledAndStopsAtEmptyCompletion(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := model.ProbeResult{Candidate: model.Candidate{AddressType: model.AddressIPv4, IP: "1.1.1.1", Port: 443}}
+	if err := store.AddHistory(model.RunSummary{RunID: "completed", State: "completed", Results: []model.ProbeResult{kept}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddHistory(model.RunSummary{RunID: "cancelled", State: "cancelled", Results: []model.ProbeResult{{Candidate: model.Candidate{AddressType: model.AddressIPv4, IP: "1.1.1.2", Port: 443}}}}); err != nil {
+		t.Fatal(err)
+	}
+	results := store.LatestCompletedResults()
+	if len(results) != 1 || results[0].Candidate.Key() != kept.Candidate.Key() {
+		t.Fatalf("cancelled run replaced completed results: %+v", results)
+	}
+	if err := store.AddHistory(model.RunSummary{RunID: "empty", State: "completed", Results: []model.ProbeResult{}}); err != nil {
+		t.Fatal(err)
+	}
+	if results := store.LatestCompletedResults(); len(results) != 0 {
+		t.Fatalf("empty completion fell back to older results: %+v", results)
 	}
 }
 

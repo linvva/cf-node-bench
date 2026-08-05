@@ -1,4 +1,4 @@
-import type { Bootstrap, FailureReason, HTTPSource, PublicationResult, PublicationUpdate, PublishCredentialTarget, PublishSaveRequest, PublishSettingsView, PublishTarget, RunProgress, RunSummary, Settings, StageProgress } from "../types";
+import type { Bootstrap, Candidate, FailureReason, HTTPSource, PublicationResult, PublicationUpdate, PublishCredentialTarget, PublishSaveRequest, PublishSettingsView, PublishTarget, RunProgress, RunSummary, Settings, StageProgress } from "../types";
 import { DEFAULT_BANDWIDTH_TEST_URL } from "./bandwidthTestUrls";
 
 type Handler<T> = (value: T) => void;
@@ -19,7 +19,7 @@ let mockRunId = "";
 let mockStartedAt = "";
 let mockCompleted = 0;
 
-const defaultSettings: Settings = { tcpConcurrency:64, httpsConcurrency:16, bandwidthConcurrency:3, connectTimeoutMs:1200, requestTimeoutMs:4000, bandwidthTimeoutMs:12000, sourceTimeoutMs:10000, sourceRetries:2, tcpProbeCount:3, httpsProbeCount:3, tcpMinSuccessRate:2/3, httpsMinSuccessRate:2/3, tcpCandidateCount:150, bandwidthCandidates:30, finalResultCount:15, maxDownloadBytes:20971520, bandwidthTestUrl:DEFAULT_BANDWIDTH_TEST_URL, allowedPorts:[443,8443,2053,2083,2087,2096], allowedCountries:[], blockedCountries:[] };
+const defaultSettings: Settings = { tcpConcurrency:64, httpsConcurrency:16, bandwidthConcurrency:3, connectTimeoutMs:1200, requestTimeoutMs:4000, bandwidthTimeoutMs:12000, sourceTimeoutMs:10000, sourceRetries:2, tcpProbeCount:3, httpsProbeCount:3, tcpMinSuccessRate:2/3, httpsMinSuccessRate:2/3, tcpCandidateCount:150, bandwidthCandidates:30, finalResultCount:15, maxDownloadBytes:20971520, bandwidthTestUrl:DEFAULT_BANDWIDTH_TEST_URL, retainPreviousResults:true, allowedPorts:[443,8443,2053,2083,2087,2096], allowedCountries:[], blockedCountries:[] };
 export const defaultPublishSettings: PublishSettingsView = {
   output:{country:true,tcpP95:false,httpLatency:true,bandwidth:true},
   request:{timeoutMs:10000,maxRetries:2,retryDelayMs:1000},
@@ -80,11 +80,12 @@ let mockData: Bootstrap = {
 const mockCountries=["CN","US","JP","HK","SG","DE"];
 const mockCandidates=Array.from({length:48},(_,index)=>({addressType:"ipv4" as const,ip:`104.18.${Math.floor(index/250)+1}.${index+20}`,port:index%4===0?8443:443,country:mockCountries[index%mockCountries.length],sourceId:"example-community-1"}));
 
-function mockCandidateAllowed(candidate: typeof mockCandidates[number]) {
+function mockCandidateAllowed(candidate: Candidate) {
   const settings=mockData.settings;
+  const country=candidate.country??"";
   return (settings.allowedPorts.length===0||settings.allowedPorts.includes(candidate.port))
-    && !settings.blockedCountries.includes(candidate.country)
-    && (settings.allowedCountries.length===0||settings.allowedCountries.includes(candidate.country));
+    && !settings.blockedCountries.includes(country)
+    && (settings.allowedCountries.length===0||settings.allowedCountries.includes(country));
 }
 
 function mockPlan(): StageProgress[] {
@@ -95,13 +96,18 @@ function mockPlan(): StageProgress[] {
   const countryFailed=portPassed.filter(candidate=>!mockCandidateAllowed(candidate)).length;
   const tcpFailed=Math.min(4,filtered.length); const tcpPassed=filtered.length-tcpFailed;
   const httpsInput=Math.min(tcpPassed,settings.tcpCandidateCount); const httpsFailed=Math.min(2,httpsInput); const httpsPassed=httpsInput-httpsFailed;
-  const bandwidthInput=Math.min(httpsPassed,settings.bandwidthCandidates); const bandwidthFailed=Math.min(1,bandwidthInput);
-  const rankingPassed=Math.min(bandwidthInput,settings.finalResultCount);
+  const freshKeys=new Set(mockCandidates.map(candidate=>`${candidate.ip}:${candidate.port}`));
+  const latestCompleted=mockData.history.find(summary=>summary.state==="completed");
+  const retainedInput=settings.retainPreviousResults?(latestCompleted?.results??[]).filter(result=>!freshKeys.has(`${result.candidate.ip}:${result.candidate.port}`)&&mockCandidateAllowed(result.candidate)&&result.tcp.successRate>=settings.tcpMinSuccessRate).length:0;
+  const retainedFailed=Math.min(1,retainedInput); const retainedPassed=retainedInput-retainedFailed;
+  const bandwidthInput=Math.min(httpsPassed,settings.bandwidthCandidates)+retainedPassed; const bandwidthFailed=Math.min(1,bandwidthInput);
+  const rankingPassed=Math.min(bandwidthInput-bandwidthFailed,settings.finalResultCount);
   return [
     {name:"source",input:mockData.sources.filter(source=>source.enabled).length,passed:mockData.sources.filter(source=>source.enabled).length,failed:0,durationMs:180,state:"completed"},
     {name:"filter",input:mockCandidates.length+2,passed:filtered.length,failed:2+portFailed+countryFailed,durationMs:24,state:"completed"},
     {name:"tcp",input:filtered.length,passed:tcpPassed,failed:tcpFailed,attemptsCompleted:filtered.length*settings.tcpProbeCount,attemptsTotal:filtered.length*settings.tcpProbeCount,durationMs:1480,state:"completed"},
     {name:"https",input:httpsInput,passed:httpsPassed,failed:httpsFailed,attemptsCompleted:httpsInput*settings.httpsProbeCount,attemptsTotal:httpsInput*settings.httpsProbeCount,durationMs:1760,state:"completed"},
+    {name:"retained",input:retainedInput,passed:retainedPassed,failed:retainedFailed,attemptsCompleted:retainedInput,attemptsTotal:retainedInput,durationMs:retainedInput?420:0,state:"completed"},
     {name:"bandwidth",input:bandwidthInput,passed:bandwidthInput-bandwidthFailed,failed:bandwidthFailed,attemptsCompleted:bandwidthInput,attemptsTotal:bandwidthInput,durationMs:1930,state:"completed"},
     {name:"ranking",input:bandwidthInput,passed:rankingPassed,failed:bandwidthInput-rankingPassed,durationMs:28,state:"completed"},
   ];
@@ -124,13 +130,14 @@ function mockFailures(plan: StageProgress[], completed: number): Partial<Record<
   if(completed>1){ failures.invalid_ip=2; const portFiltered=plan[1].input-2-mockCandidates.filter(candidate=>mockData.settings.allowedPorts.length===0||mockData.settings.allowedPorts.includes(candidate.port)).length; if(portFiltered)failures.port_filtered=portFiltered; const countryFiltered=plan[1].failed-2-portFiltered; if(countryFiltered)failures.country_filtered=countryFiltered; }
   if(completed>2&&plan[2].failed)failures.timeout=plan[2].failed;
   if(completed>3&&plan[3].failed)failures.tls=plan[3].failed;
-  if(completed>4&&plan[4].failed)failures.download=plan[4].failed;
+  if(completed>4&&plan[4].failed)failures.tls=(failures.tls??0)+plan[4].failed;
+  if(completed>5&&plan[5].failed)failures.download=plan[5].failed;
   return failures;
 }
 
 function mockResults(runId=mockRunId, startedAt=mockStartedAt, completed=mockPlan().length): RunSummary {
   const plan=mockPlan();
-  const results=mockCandidates.filter(mockCandidateAllowed).slice(0,plan[5].passed).map((candidate,index)=>({
+  const results=mockCandidates.filter(mockCandidateAllowed).slice(0,plan[6].passed).map((candidate,index)=>({
     candidate,
     tcp:{attempts:3,successes:3,successRate:1,averageMs:18+index*2.1,p50Ms:17+index*2,p95Ms:22+index*2.4,jitterMs:2+index*.2,failures:{}},
     https:{attempts:3,successes:index===8?2:3,successRate:index===8?2/3:1,averageMs:44+index*3,p50Ms:42+index*3,p95Ms:51+index*3.4,jitterMs:3.2+index*.35,failures:index===8?{timeout:1}:{}},

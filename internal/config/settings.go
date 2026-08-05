@@ -11,27 +11,28 @@ import (
 const DefaultBandwidthTestURL = "https://speed.cloudflare.com/__down?bytes=99999999"
 
 type Settings struct {
-	TCPConcurrency       int      `json:"tcpConcurrency"`
-	HTTPSConcurrency     int      `json:"httpsConcurrency"`
-	BandwidthConcurrency int      `json:"bandwidthConcurrency"`
-	ConnectTimeoutMS     int      `json:"connectTimeoutMs"`
-	RequestTimeoutMS     int      `json:"requestTimeoutMs"`
-	BandwidthTimeoutMS   int      `json:"bandwidthTimeoutMs"`
-	SourceTimeoutMS      int      `json:"sourceTimeoutMs"`
-	SourceRetries        int      `json:"sourceRetries"`
-	TCPProbeCount        int      `json:"tcpProbeCount"`
-	HTTPSProbeCount      int      `json:"httpsProbeCount"`
-	TCPMinSuccessRate    float64  `json:"tcpMinSuccessRate"`
-	HTTPSMinSuccessRate  float64  `json:"httpsMinSuccessRate"`
-	TCPCandidateCount    int      `json:"tcpCandidateCount"`
-	BandwidthCandidates  int      `json:"bandwidthCandidates"`
-	FinalResultCount     int      `json:"finalResultCount"`
-	MaxDownloadBytes     int64    `json:"maxDownloadBytes"`
-	BandwidthTestURL     string   `json:"bandwidthTestUrl"`
-	AllowedPorts         []int    `json:"allowedPorts"`
-	AllowedCountries     []string `json:"allowedCountries"`
-	BlockedCountries     []string `json:"blockedCountries"`
-	LegacyProbeCount     int      `json:"probeCount,omitempty"`
+	TCPConcurrency        int      `json:"tcpConcurrency"`
+	HTTPSConcurrency      int      `json:"httpsConcurrency"`
+	BandwidthConcurrency  int      `json:"bandwidthConcurrency"`
+	ConnectTimeoutMS      int      `json:"connectTimeoutMs"`
+	RequestTimeoutMS      int      `json:"requestTimeoutMs"`
+	BandwidthTimeoutMS    int      `json:"bandwidthTimeoutMs"`
+	SourceTimeoutMS       int      `json:"sourceTimeoutMs"`
+	SourceRetries         int      `json:"sourceRetries"`
+	TCPProbeCount         int      `json:"tcpProbeCount"`
+	HTTPSProbeCount       int      `json:"httpsProbeCount"`
+	TCPMinSuccessRate     float64  `json:"tcpMinSuccessRate"`
+	HTTPSMinSuccessRate   float64  `json:"httpsMinSuccessRate"`
+	TCPCandidateCount     int      `json:"tcpCandidateCount"`
+	BandwidthCandidates   int      `json:"bandwidthCandidates"`
+	FinalResultCount      int      `json:"finalResultCount"`
+	MaxDownloadBytes      int64    `json:"maxDownloadBytes"`
+	BandwidthTestURL      string   `json:"bandwidthTestUrl"`
+	RetainPreviousResults bool     `json:"retainPreviousResults"`
+	AllowedPorts          []int    `json:"allowedPorts"`
+	AllowedCountries      []string `json:"allowedCountries"`
+	BlockedCountries      []string `json:"blockedCountries"`
+	LegacyProbeCount      int      `json:"probeCount,omitempty"`
 }
 
 func DefaultSettings() Settings {
@@ -43,9 +44,10 @@ func DefaultSettings() Settings {
 		TCPMinSuccessRate: 2.0 / 3.0, HTTPSMinSuccessRate: 2.0 / 3.0,
 		TCPCandidateCount: 150, BandwidthCandidates: 30,
 		FinalResultCount: 15, MaxDownloadBytes: 20 * 1024 * 1024,
-		BandwidthTestURL: DefaultBandwidthTestURL,
-		AllowedPorts:     []int{443, 8443, 2053, 2083, 2087, 2096},
-		AllowedCountries: []string{}, BlockedCountries: []string{},
+		BandwidthTestURL:      DefaultBandwidthTestURL,
+		RetainPreviousResults: true,
+		AllowedPorts:          []int{443, 8443, 2053, 2083, 2087, 2096},
+		AllowedCountries:      []string{}, BlockedCountries: []string{},
 	}
 }
 

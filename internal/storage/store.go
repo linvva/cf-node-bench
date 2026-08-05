@@ -114,6 +114,17 @@ func (s *Store) History() []model.RunSummary {
 	return append([]model.RunSummary{}, s.data.History...)
 }
 
+func (s *Store) LatestCompletedResults() []model.ProbeResult {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, summary := range s.data.History {
+		if summary.State == "completed" {
+			return append([]model.ProbeResult(nil), summary.Results...)
+		}
+	}
+	return []model.ProbeResult{}
+}
+
 func (s *Store) PublishSettings() publish.Settings {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

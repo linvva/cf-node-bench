@@ -1,7 +1,7 @@
 import { memo, useMemo, useState } from "react";
-import { Button, Checkbox, Drawer, Input, Popover, Table, toast } from "@heroui/react";
+import { Button, Checkbox, Drawer, Input, Popover, Switch, Table, toast } from "@heroui/react";
 import { Clipboard, Download, RotateCw, Search, Send, SlidersHorizontal, X } from "lucide-react";
-import { actions } from "../../store";
+import { actions, useAppStore } from "../../store";
 import type { ProbeResult, PublishTarget, RunSummary } from "../../types";
 import { PublicationStatus } from "../publish/PublishPage";
 
@@ -26,11 +26,15 @@ export function formatCopyResults(results: ProbeResult[], fields: CopyFields) {
 }
 
 export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: RunSummary }) {
+  const settings = useAppStore((state) => state.settings);
+  const history = useAppStore((state) => state.history);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("score");
   const [selected, setSelected] = useState<ProbeResult>();
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [copyFields, setCopyFields] = useState<CopyFields>(defaultCopyFields);
+  const [savingRetention, setSavingRetention] = useState(false);
+  const retainedCount = history.find((item) => item.state === "completed")?.results.length ?? 0;
   const results = useMemo(
     () => [...(summary?.results || [])]
       .filter((item) => `${keyOf(item)} ${item.candidate.country}`.toLowerCase().includes(query.toLowerCase()))
@@ -56,6 +60,17 @@ export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: 
     if(!summary)return;
     try{await actions.publishRun(summary.runId,target);toast.success("发布任务已加入队列");}catch(reason){toast.danger(String(reason));}
   };
+  const toggleRetention=async(value:boolean)=>{
+    setSavingRetention(true);
+    try{
+      await actions.saveSettings({...settings,retainPreviousResults:value});
+      toast.success(value?`下轮将复测上次的 ${retainedCount} 个结果`:"已关闭上轮结果复测");
+    }catch(reason){
+      toast.danger(`保存失败：${String(reason)}`);
+    }finally{
+      setSavingRetention(false);
+    }
+  };
 
   return <section className="panel results-panel">
     <div className="section-heading"><h2>测速结果</h2><span>{summary?.state === "cancelled" ? "任务已取消" : summary ? `完成于 ${new Date(summary.finishedAt).toLocaleTimeString("zh-CN")}` : "等待首次测速"}</span></div>
@@ -63,6 +78,7 @@ export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: 
     <div className="results-toolbar">
       <Input className="search" aria-label="筛选节点" placeholder="筛选 IP、端口或国家" value={query} onChange={(event) => setQuery(event.target.value)} />
       <Button variant="secondary" onPress={() => setSort(sort === "score" ? "tcp" : sort === "tcp" ? "https" : sort === "https" ? "bandwidth" : "score")}>排序：{{ score: "综合分", tcp: "TCP P95", https: "HTTPS P95", bandwidth: "带宽" }[sort]}</Button>
+      {retainedCount>0&&<Switch className="retention-switch" aria-label={`下轮复测上次结果，${retainedCount} 个节点`} isSelected={settings.retainPreviousResults} isDisabled={savingRetention} onChange={value=>void toggleRetention(value)}><Switch.Content><Switch.Control><Switch.Thumb/></Switch.Control><span>下轮复测上次结果（{retainedCount}）</span></Switch.Content></Switch>}
       <span className="spacer" /><span className="results-summary">{selectedKeys.size ? `已选 ${selectedKeys.size}` : `${results.length} 个节点`}</span>
       <Popover><Popover.Trigger><Button isIconOnly variant="tertiary" aria-label="复制选项" isDisabled={!results.length}><SlidersHorizontal size={15} /></Button></Popover.Trigger><Popover.Content isNonModal placement="bottom end"><Popover.Dialog className="copy-options"><Popover.Heading>复制内容</Popover.Heading><div className="copy-options-list">
         <CopyOption label="国家代码" selected={copyFields.country} onChange={(country) => setCopyFields((fields) => ({ ...fields, country }))} />

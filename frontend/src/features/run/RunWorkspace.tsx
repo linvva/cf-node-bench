@@ -1,11 +1,11 @@
 import { Button, ProgressBar } from "@heroui/react";
-import { Activity, Check, ChevronRight, CircleStop, Gauge, Play, ShieldCheck, Wifi } from "lucide-react";
+import { Activity, Check, ChevronRight, CircleStop, Gauge, GitMerge, Play, Plus, ShieldCheck, Wifi } from "lucide-react";
 import { actions, useAppStore } from "../../store";
 import type { StageProgress } from "../../types";
 import { ResultsTable } from "../results/ResultsTable";
 import { HistoryChart } from "./HistoryChart";
 
-const stages=[{id:"source",label:"数据源",activity:"获取数据源"},{id:"filter",label:"解析 / 过滤",activity:"解析与过滤"},{id:"tcp",label:"TCP",activity:"TCP 探测"},{id:"https",label:"HTTPS",activity:"HTTPS 探测"},{id:"bandwidth",label:"带宽",activity:"带宽测试"},{id:"ranking",label:"排序",activity:"综合排序"}];
+const stages=[{id:"source",label:"数据源",activity:"获取数据源"},{id:"filter",label:"解析 / 过滤",activity:"解析与过滤"},{id:"tcp",label:"TCP",activity:"TCP 探测"},{id:"https",label:"HTTPS",activity:"HTTPS 探测"},{id:"retained",label:"保留复检",activity:"复检上轮结果"},{id:"bandwidth",label:"带宽",activity:"带宽测试"},{id:"ranking",label:"排序",activity:"综合排序"}];
 const failureLabels:Record<string,string>={invalid_ip:"无效 IP",invalid_port:"无效端口",invalid_tag:"无效标签",port_filtered:"端口排除",country_filtered:"国家排除",dns:"DNS",tcp:"TCP",tls:"TLS",timeout:"超时",http_status:"HTTP 状态",cancelled:"已取消",download:"下载"};
 
 export function RunWorkspace(){
@@ -37,13 +37,19 @@ function RunProgressPanels(){
   const title=isRunning?`${active.activity}进行中`:runState==="completed"?"最近测速已完成":runState==="cancelled"?"测速已取消":"等待开始测速";
   const failureEntries=Object.entries(failures).filter(([,count])=>count).sort((left,right)=>right[1]-left[1]);
   const failureTotal=failureEntries.reduce((total,[,count])=>total+count,0); const failureMax=failureEntries[0]?.[1]||1;
-  const funnel=[
+  const freshPath=[
     {label:"解析输入",value:stageValues[1].current?.input},
     {label:"过滤后",value:stageValues[1].current?.passed},
     {label:"TCP 通过",value:stageValues[2].current?.passed},
     {label:"HTTPS 通过",value:stageValues[3].current?.passed},
-    {label:"带宽通过",value:stageValues[4].current?.passed},
-    {label:"最终结果",value:stageValues[5].current?.passed},
+  ];
+  const retainedPath=[
+    {label:"复检输入",value:stageValues[4].current?.input},
+    {label:"复检通过",value:stageValues[4].current?.passed},
+  ];
+  const mergedPath=[
+    {label:"带宽通过",value:stageValues[5].current?.passed},
+    {label:"最终结果",value:stageValues[6].current?.passed},
   ];
   return <div className="progress-stack">
     <section className="panel run-progress-panel" aria-label="当前测速进度">
@@ -62,10 +68,14 @@ function RunProgressPanels(){
       </section>
     </section>
     <div className="run-insights">
-      <section className="panel candidate-panel" aria-label="候选漏斗"><div className="insight-heading"><div><h2>候选漏斗</h2><span>节点通过每个阶段后的剩余数量</span></div></div><div className="funnel-list">{funnel.map((item,index)=><div className="funnel-step-wrap" key={item.label}><div className="funnel-step"><strong>{item.value===undefined?"-":formatCount(item.value)}</strong><span>{item.label}</span></div>{index<funnel.length-1&&<ChevronRight size={15}/>}</div>)}</div></section>
+      <section className="panel candidate-panel" aria-label="候选路径"><div className="insight-heading"><div><h2>候选路径</h2><span>新节点与上轮结果在带宽阶段汇合</span></div></div><div className="candidate-paths"><CandidateLane label="新节点" items={freshPath}/><Plus className="path-operator" size={15}/><CandidateLane label="上轮保留" items={retainedPath}/><GitMerge className="path-operator" size={15}/><CandidateLane label="汇合结果" items={mergedPath}/></div></section>
       <aside className="panel failure-panel"><div className="insight-heading"><div><h2>累计失败</h2><span>{failureTotal?`${formatCount(failureTotal)} 条失败记录`:"当前没有失败记录"}</span></div></div>{failureEntries.length?<div className="failure-bars">{failureEntries.slice(0,4).map(([reason,count])=><div className="failure-row" key={reason}><span>{failureLabels[reason]||reason}</span><i><b style={{width:`${Math.max(4,count/failureMax*100)}%`}}/></i><strong>{formatCount(count)}</strong></div>)}</div>:<div className="empty-note"><ShieldCheck size={15}/> 尚无失败记录</div>}</aside>
     </div>
   </div>;
+}
+
+function CandidateLane({label,items}:{label:string;items:{label:string;value?:number}[]}){
+  return <div className="candidate-lane"><small>{label}</small><div>{items.map((item,index)=><div className="funnel-step-wrap" key={item.label}><div className="funnel-step"><strong>{item.value===undefined?"-":formatCount(item.value)}</strong><span>{item.label}</span></div>{index<items.length-1&&<ChevronRight size={13}/>}</div>)}</div></div>;
 }
 
 function stageActivity(stage?:StageProgress){

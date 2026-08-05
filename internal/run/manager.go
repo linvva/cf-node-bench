@@ -9,7 +9,6 @@ import (
 
 	"github.com/linvva/cf-node-bench/internal/config"
 	"github.com/linvva/cf-node-bench/internal/model"
-	"github.com/linvva/cf-node-bench/internal/source"
 )
 
 var ErrAlreadyRunning = errors.New("已有测速任务正在运行")
@@ -20,7 +19,7 @@ type Manager struct {
 	current string
 }
 
-func (m *Manager) Start(parent context.Context, engine Engine, settings config.Settings, sources []source.HTTPSource, emit func(model.RunProgress), done func(model.RunSummary)) (string, error) {
+func (m *Manager) Start(parent context.Context, engine Engine, settings config.Settings, input RunInput, emit func(model.RunProgress), done func(model.RunSummary)) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.cancel != nil {
@@ -30,7 +29,7 @@ func (m *Manager) Start(parent context.Context, engine Engine, settings config.S
 	ctx, cancel := context.WithCancel(parent)
 	m.cancel, m.current = cancel, id
 	go func() {
-		summary := engine.Run(ctx, id, settings, sources, emit)
+		summary := engine.Run(ctx, id, settings, input, emit)
 		m.mu.Lock()
 		m.cancel = nil
 		m.current = ""

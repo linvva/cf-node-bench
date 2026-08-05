@@ -13,6 +13,7 @@ describe("Wails bridge normalization",()=>{
     expect(value.settings.allowedCountries).toEqual([]);
     expect(value.settings.blockedCountries).toEqual([]);
     expect(value.settings.bandwidthTestUrl).toBe(DEFAULT_BANDWIDTH_TEST_URL);
+    expect(value.settings.retainPreviousResults).toBe(true);
     expect(value.sources).toEqual([]);
     expect(value.history[0].results).toEqual([]);
     expect(value.history[0].failures).toEqual({});

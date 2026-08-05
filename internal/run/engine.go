@@ -35,11 +35,17 @@ type Dependencies struct {
 
 type Engine struct{ Dependencies Dependencies }
 
-func (e Engine) Run(ctx context.Context, runID string, settings config.Settings, sources []source.HTTPSource, emit func(model.RunProgress)) model.RunSummary {
+type RunInput struct {
+	Sources  []source.HTTPSource
+	Retained []model.ProbeResult
+}
+
+func (e Engine) Run(ctx context.Context, runID string, settings config.Settings, input RunInput, emit func(model.RunProgress)) model.RunSummary {
 	started := time.Now()
 	progress := newProgress(runID, started, emit)
 	results := make([]model.ProbeResult, 0)
 
+	sources := input.Sources
 	enabledSources := countIf(sources, func(item source.HTTPSource) bool { return item.Enabled })
 	progress.start("source", enabledSources)
 	candidates := make([]model.Candidate, 0)
@@ -69,6 +75,7 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 		}
 	}
 	candidates = unique(candidates)
+	retainedResults, retainedFailures := prepareRetained(input.Retained, candidates, settings)
 	progress.finish("source", enabledSources, sourcesPassed, enabledSources-sourcesPassed)
 
 	filterStarted := time.Now()
@@ -91,6 +98,7 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 	filterFailed := failureCount(filterFailures)
 	progress.addFailures(filterFailures)
 	progress.finishAt("filter", filterInput, len(candidates), filterFailed, filterStarted)
+	progress.addFailures(retainedFailures)
 
 	progress.startProbe("tcp", len(candidates), settings.TCPProbeCount)
 	tcpStarted := time.Now()
@@ -103,44 +111,66 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 	slices.SortStableFunc(tcpResults, compareTCP)
 	passedTCP := countIf(tcpResults, func(r model.ProbeResult) bool { return r.TCP.SuccessRate >= settings.TCPMinSuccessRate })
 	tcpResults = filter(tcpResults, func(r model.ProbeResult) bool { return r.TCP.SuccessRate >= settings.TCPMinSuccessRate })
-	if len(tcpResults) > settings.TCPCandidateCount {
-		tcpResults = tcpResults[:settings.TCPCandidateCount]
-	}
 	progress.finishAt("tcp", len(candidates), passedTCP, len(candidates)-passedTCP, tcpStarted)
 	if ctx.Err() != nil {
 		return progress.summary(started, nil, "cancelled")
 	}
 
-	progress.startProbe("https", len(tcpResults), settings.HTTPSProbeCount)
+	httpsInitialCount := min(settings.TCPCandidateCount, len(tcpResults))
+	httpsTarget := min(settings.BandwidthCandidates, len(tcpResults))
+	progress.startProbe("https", httpsInitialCount, settings.HTTPSProbeCount)
 	httpsStarted := time.Now()
-	httpsResults := parallel(ctx, tcpResults, settings.HTTPSConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
-		result.HTTPS = e.Dependencies.HTTPS.Probe(ctx, result.Candidate, settings.HTTPSProbeCount, func() { progress.attempt("https") })
+	httpsResults := make([]model.ProbeResult, 0, httpsInitialCount)
+	passedHTTPS := 0
+	nextHTTPSCandidate := 0
+	// Probe the configured TCP pool first, then refill missing passes from the remaining TCP-ranked candidates.
+	for passedHTTPS < httpsTarget && nextHTTPSCandidate < len(tcpResults) && ctx.Err() == nil {
+		batchSize := httpsInitialCount
+		if nextHTTPSCandidate > 0 {
+			batchSize = min(httpsTarget-passedHTTPS, len(tcpResults)-nextHTTPSCandidate)
+			progress.extendProbe("https", batchSize, settings.HTTPSProbeCount)
+		}
+		batch := tcpResults[nextHTTPSCandidate : nextHTTPSCandidate+batchSize]
+		nextHTTPSCandidate += batchSize
+		batchResults := parallel(ctx, batch, settings.HTTPSConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
+			result.HTTPS = e.Dependencies.HTTPS.Probe(ctx, result.Candidate, settings.HTTPSProbeCount, func() { progress.attempt("https") })
+			return result
+		}, func(result model.ProbeResult) {
+			passed := result.HTTPS.SuccessRate >= settings.HTTPSMinSuccessRate
+			progress.advance("https", passed, nodeFailure(passed, result.HTTPS.Failures, model.FailureTLS))
+		})
+		httpsResults = append(httpsResults, batchResults...)
+		passedHTTPS += countIf(batchResults, func(r model.ProbeResult) bool { return r.HTTPS.SuccessRate >= settings.HTTPSMinSuccessRate })
+	}
+	slices.SortStableFunc(httpsResults, compareHTTPS)
+	httpsResults = filter(httpsResults, func(r model.ProbeResult) bool { return r.HTTPS.SuccessRate >= settings.HTTPSMinSuccessRate })
+	progress.finishAt("https", nextHTTPSCandidate, passedHTTPS, nextHTTPSCandidate-passedHTTPS, httpsStarted)
+	if ctx.Err() != nil {
+		return progress.summary(started, nil, "cancelled")
+	}
+
+	retainedInput := len(retainedResults)
+	progress.startProbe("retained", retainedInput, 1)
+	retainedStarted := time.Now()
+	retainedResults = parallel(ctx, retainedResults, settings.HTTPSConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
+		result.HTTPS = e.Dependencies.HTTPS.Probe(ctx, result.Candidate, 1, func() { progress.attempt("retained") })
 		return result
 	}, func(result model.ProbeResult) {
 		passed := result.HTTPS.SuccessRate >= settings.HTTPSMinSuccessRate
-		progress.advance("https", passed, nodeFailure(passed, result.HTTPS.Failures, model.FailureTCP))
+		progress.advance("retained", passed, nodeFailure(passed, result.HTTPS.Failures, model.FailureTLS))
 	})
-	slices.SortStableFunc(httpsResults, compareHTTPS)
-	passedHTTPS := countIf(httpsResults, func(r model.ProbeResult) bool { return r.HTTPS.SuccessRate >= settings.HTTPSMinSuccessRate })
-	httpsResults = filter(httpsResults, func(r model.ProbeResult) bool { return r.HTTPS.SuccessRate >= settings.HTTPSMinSuccessRate })
-	progress.finishAt("https", len(tcpResults), passedHTTPS, len(tcpResults)-passedHTTPS, httpsStarted)
+	passedRetained := countIf(retainedResults, func(r model.ProbeResult) bool { return r.HTTPS.SuccessRate >= settings.HTTPSMinSuccessRate })
+	retainedResults = filter(retainedResults, func(r model.ProbeResult) bool { return r.HTTPS.SuccessRate >= settings.HTTPSMinSuccessRate })
+	progress.finishAt("retained", retainedInput, passedRetained, retainedInput-passedRetained, retainedStarted)
 	if ctx.Err() != nil {
 		return progress.summary(started, nil, "cancelled")
 	}
 
 	bandwidthTarget := min(settings.BandwidthCandidates, len(httpsResults))
-	progress.startProbe("bandwidth", bandwidthTarget, 1)
+	progress.startProbe("bandwidth", len(retainedResults)+bandwidthTarget, 1)
 	bandStarted := time.Now()
-	passedBand := 0
-	nextCandidate := 0
-	for passedBand < bandwidthTarget && nextCandidate < len(httpsResults) && ctx.Err() == nil {
-		batchSize := min(bandwidthTarget-passedBand, len(httpsResults)-nextCandidate)
-		if nextCandidate > 0 {
-			progress.extendProbe("bandwidth", batchSize, 1)
-		}
-		batch := httpsResults[nextCandidate : nextCandidate+batchSize]
-		nextCandidate += batchSize
-		batchResults := parallel(ctx, batch, settings.BandwidthConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
+	probeBandwidth := func(batch []model.ProbeResult) []model.ProbeResult {
+		return parallel(ctx, batch, settings.BandwidthConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
 			result.Bandwidth = e.Dependencies.Bandwidth.Probe(ctx, result.Candidate)
 			progress.attempt("bandwidth")
 			return result
@@ -151,9 +181,25 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 			}
 			progress.advance("bandwidth", bandwidthPassed(result), failures)
 		})
-		results = append(results, batchResults...)
-		passedBand += countIf(batchResults, bandwidthPassed)
 	}
+	retainedBandwidthResults := probeBandwidth(retainedResults)
+	results = append(results, retainedBandwidthResults...)
+	passedRetainedBand := countIf(retainedBandwidthResults, bandwidthPassed)
+
+	passedFreshBand := 0
+	nextCandidate := 0
+	for passedFreshBand < bandwidthTarget && nextCandidate < len(httpsResults) && ctx.Err() == nil {
+		batchSize := min(bandwidthTarget-passedFreshBand, len(httpsResults)-nextCandidate)
+		if nextCandidate > 0 {
+			progress.extendProbe("bandwidth", batchSize, 1)
+		}
+		batch := httpsResults[nextCandidate : nextCandidate+batchSize]
+		nextCandidate += batchSize
+		batchResults := probeBandwidth(batch)
+		results = append(results, batchResults...)
+		passedFreshBand += countIf(batchResults, bandwidthPassed)
+	}
+	passedBand := passedRetainedBand + passedFreshBand
 	progress.finishAt("bandwidth", len(results), passedBand, len(results)-passedBand, bandStarted)
 	if ctx.Err() != nil {
 		return progress.summary(started, nil, "cancelled")
@@ -267,6 +313,42 @@ func unique(items []model.Candidate) []model.Candidate {
 		}
 	}
 	return result
+}
+
+func prepareRetained(items []model.ProbeResult, fresh []model.Candidate, settings config.Settings) ([]model.ProbeResult, map[model.FailureReason]int) {
+	freshKeys := make(map[string]bool, len(fresh))
+	for _, candidate := range fresh {
+		freshKeys[candidate.Key()] = true
+	}
+	seen := make(map[string]bool, len(items))
+	prepared := make([]model.ProbeResult, 0, len(items))
+	failures := map[model.FailureReason]int{}
+	for _, result := range items {
+		key := result.Candidate.Key()
+		if freshKeys[key] || seen[key] {
+			continue
+		}
+		seen[key] = true
+		if !settings.AllowsPort(result.Candidate.Port) {
+			failures[model.FailurePortFiltered]++
+			continue
+		}
+		if !settings.AllowsCountry(result.Candidate.Country) {
+			failures[model.FailureCountryFiltered]++
+			continue
+		}
+		if result.TCP.SuccessRate < settings.TCPMinSuccessRate {
+			failures[model.FailureTCP]++
+			continue
+		}
+		result.HTTPS = model.ProbeStats{}
+		result.Bandwidth = model.BandwidthStats{}
+		result.Score = 0
+		result.Parts = model.ScoreParts{}
+		result.Status = ""
+		prepared = append(prepared, result)
+	}
+	return prepared, failures
 }
 
 func cloneFailures(failures map[model.FailureReason]int) map[model.FailureReason]int {

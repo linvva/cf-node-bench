@@ -153,7 +153,12 @@ func (a *App) StartRun() (string, error) {
 	a.engine.Dependencies.HTTPS = probe.HTTPSProber{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout()}
 	a.engine.Dependencies.Bandwidth = probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.BandwidthTestURL}
 	a.mu.Unlock()
-	return a.manager.Start(a.ctx, a.engine, settings, a.store.Sources(), func(progress model.RunProgress) {
+	retained := []model.ProbeResult{}
+	if settings.RetainPreviousResults {
+		retained = a.store.LatestCompletedResults()
+	}
+	input := runengine.RunInput{Sources: a.store.Sources(), Retained: retained}
+	return a.manager.Start(a.ctx, a.engine, settings, input, func(progress model.RunProgress) {
 		runtime.EventsEmit(a.ctx, "run:progress", progress)
 	}, func(summary model.RunSummary) {
 		_ = a.store.AddHistory(summary)

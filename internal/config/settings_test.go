@@ -7,6 +7,9 @@ func TestSettingsValidation(t *testing.T) {
 	if settings.BandwidthTestURL != DefaultBandwidthTestURL {
 		t.Fatalf("default bandwidth URL = %q", settings.BandwidthTestURL)
 	}
+	if !settings.RetainPreviousResults {
+		t.Fatal("previous results must be retained by default")
+	}
 	if settings.AllowedCountries == nil {
 		t.Fatal("default country filter must encode as an empty array")
 	}

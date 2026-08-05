@@ -19,9 +19,9 @@ describe("CF Node Bench workspace",()=>{
     expect(screen.getByLabelText("测速阶段").children[0]).toHaveAttribute("data-state","running");
     expect(screen.getByLabelText("当前测速进度")).toHaveTextContent("获取数据源进行中");
     expect(screen.getByRole("progressbar",{name:"数据源进度"})).toBeInTheDocument();
-    expect(screen.getByLabelText("候选漏斗")).toBeInTheDocument();
+    expect(screen.getByLabelText("候选路径")).toBeInTheDocument();
     expect(await screen.findByRole("button",{name:/取消测速/})).toBeInTheDocument();
-    expect(screen.getByLabelText("测速阶段").children).toHaveLength(6);
+    expect(screen.getByLabelText("测速阶段").children).toHaveLength(7);
     fireEvent.click(screen.getByRole("button",{name:/取消测速/}));
     await waitFor(()=>expect(screen.getByRole("button",{name:/开始测速/})).toBeInTheDocument());
     expect(screen.getByRole("heading",{name:"测速已取消"})).toBeInTheDocument();
@@ -197,4 +197,24 @@ describe("CF Node Bench workspace",()=>{
     expect(screen.getByText("Gist")).toBeInTheDocument();
     clipboard.mockRestore(); success.mockRestore();
   });
+
+  it("persists the previous-result toggle and rolls back failed saves",async()=>{
+    render(<App/>);
+    await screen.findByRole("heading",{name:"测速工作台"});
+    fireEvent.click(screen.getByRole("button",{name:/开始测速/}));
+    await screen.findByText("104.18.1.20:8443",{}, {timeout:8000});
+    const toggle=screen.getByRole("switch",{name:/下轮复测上次结果/});
+    expect(toggle).toBeChecked();
+    const save=vi.spyOn(actions,"saveSettings");
+    fireEvent.click(toggle);
+    await waitFor(()=>expect(save).toHaveBeenCalledWith(expect.objectContaining({retainPreviousResults:false})));
+    await waitFor(()=>expect(toggle).not.toBeChecked());
+
+    const danger=vi.spyOn(toast,"danger");
+    save.mockRejectedValueOnce(new Error("disk full"));
+    fireEvent.click(toggle);
+    await waitFor(()=>expect(danger).toHaveBeenCalledWith(expect.stringContaining("disk full")));
+    expect(toggle).not.toBeChecked();
+    save.mockRestore(); danger.mockRestore();
+  },10000);
 });
