@@ -14,10 +14,13 @@ describe("Wails bridge normalization",()=>{
     expect(value.settings.blockedCountries).toEqual([]);
     expect(value.settings.bandwidthTestUrl).toBe(DEFAULT_BANDWIDTH_TEST_URL);
     expect(value.settings.retainPreviousResults).toBe(true);
+    expect(value.settings.scoreWeights).toEqual({bandwidth:40,https:25,tcp:15,reliability:15,jitter:5});
     expect(value.sources).toEqual([]);
     expect(value.history[0].results).toEqual([]);
     expect(value.history[0].failures).toEqual({});
     expect(value.history[0].publications).toEqual([]);
+    expect(value.history[0].scoreWeights).toEqual({tcp:20,https:20,jitter:10,reliability:30,bandwidth:20});
+    expect(value.resume.options).toEqual([]);
     expect(value.publishSettings.cloudflare.recordType).toBe("A");
     expect(value.publishSettings.gist).toEqual({enabled:false,tokenConfigured:false,gistId:"",filename:"ip.txt"});
     expect(value.publishSettings.telegram.contentMode).toBe("summary");

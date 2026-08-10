@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/linvva/cf-node-bench/internal/model"
+)
 
 func TestSettingsValidation(t *testing.T) {
 	settings := DefaultSettings()
@@ -9,6 +13,9 @@ func TestSettingsValidation(t *testing.T) {
 	}
 	if !settings.RetainPreviousResults {
 		t.Fatal("previous results must be retained by default")
+	}
+	if settings.ScoreWeights != DefaultScoreWeights() {
+		t.Fatalf("default score weights = %+v", settings.ScoreWeights)
 	}
 	if settings.AllowedCountries == nil {
 		t.Fatal("default country filter must encode as an empty array")
@@ -22,6 +29,33 @@ func TestSettingsValidation(t *testing.T) {
 	settings.BandwidthCandidates = settings.TCPCandidateCount + 1
 	if err := settings.Validate(); err == nil {
 		t.Fatal("expected candidate relationship error")
+	}
+}
+
+func TestScoreWeightValidationAndMigration(t *testing.T) {
+	settings := DefaultSettings()
+	settings.ScoreWeights.TCP = 0
+	settings.ScoreWeights.Bandwidth += 15
+	if err := settings.Validate(); err != nil {
+		t.Fatalf("zero weight should be valid: %v", err)
+	}
+	settings.ScoreWeights.HTTPS++
+	if err := settings.Validate(); err == nil || err.Error() != "评分权重总和必须等于 100" {
+		t.Fatalf("unexpected total validation: %v", err)
+	}
+
+	legacy := DefaultSettings()
+	legacy.ScoreWeights = model.ScoreWeights{}
+	legacy.MigrateLegacy()
+	if legacy.ScoreWeights != DefaultScoreWeights() {
+		t.Fatalf("missing weights were not migrated: %+v", legacy.ScoreWeights)
+	}
+
+	explicitZero := DefaultSettings()
+	explicitZero.ScoreWeights = model.ScoreWeights{}
+	explicitZero.Normalize()
+	if err := explicitZero.Validate(); err == nil || err.Error() != "评分权重总和必须等于 100" {
+		t.Fatalf("explicit zero weights were not rejected: %v", err)
 	}
 }
 

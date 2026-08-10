@@ -17,7 +17,7 @@ test("workspace remains stable through a complete run",async({page},testInfo)=>{
   const during=await stage.boundingBox();
   expect(during?.height).toBe(before?.height);
   await expect(page.getByText("104.18.1.20:8443")).toBeVisible({timeout:8000});
-  const retention=page.getByRole("switch",{name:/下轮复测上次结果/});
+  const retention=page.getByRole("switch",{name:/全量测速时优先复检上轮结果/});
   const retentionControl=page.locator(".retention-switch [data-slot='switch-content']");
   await expect(retention).toBeChecked();
   await retentionControl.click();
@@ -64,6 +64,33 @@ test("progress stays responsive while previous results remain visible",async({pa
   const retainedStage=page.locator(".stage").filter({hasText:"保留复检"});
   await expect(retainedStage).toContainText("14 通过 · 1 失败");
   await expect(page.getByLabel("候选路径")).toContainText("15复检输入");
+});
+
+test("stage checkpoints restart HTTPS bandwidth and ranking",async({page},testInfo)=>{
+  await page.goto("/");
+  const start=page.getByRole("button",{name:/开始测速/});
+  await start.click();
+  await expect(start).toBeVisible({timeout:8000});
+
+  const restart=async(name:string,runningIndex:number,reusedIndexes:number[])=>{
+    await page.getByLabel("选择测速起点").click();
+    const option=page.getByRole("menuitem",{name:new RegExp(name)});
+    await expect(option).toContainText("个输入");
+    await option.click();
+    await expect(page.getByRole("button",{name:/取消测速/})).toBeVisible();
+    const stages=page.locator(".stage");
+    for(const index of reusedIndexes)await expect(stages.nth(index)).toHaveAttribute("data-state","reused",{timeout:3000});
+    await expect(stages.nth(runningIndex)).toHaveAttribute("data-state","running",{timeout:3000});
+    await expect(start).toBeVisible({timeout:8000});
+    await page.waitForTimeout(80);
+  };
+
+  await restart("从 HTTPS 开始",3,[0,1,2]);
+  await restart("仅重测带宽",5,[0,1,2,3,4]);
+  await restart("仅重新排序",6,[0,1,2,3,4,5]);
+  await page.getByLabel("选择测速起点").click();
+  await page.waitForTimeout(350);
+  await page.screenshot({path:testInfo.outputPath("stage-restart-menu.png"),fullPage:true});
 });
 
 test("settings and sources fit without overlap",async({page},testInfo)=>{

@@ -6,6 +6,7 @@ import { ResultsTable } from "../src/features/results/ResultsTable";
 import { countryOptions } from "../src/features/settings/countries";
 import { validateBandwidthTestURL, validateSettings } from "../src/features/settings/SettingsPage";
 import { bandwidthTestURLPresets, DEFAULT_BANDWIDTH_TEST_URL } from "../src/lib/bandwidthTestUrls";
+import { DEFAULT_SCORE_WEIGHTS } from "../src/lib/scoring";
 import { actions, getAppState } from "../src/store";
 import type { RunSummary } from "../src/types";
 
@@ -25,6 +26,8 @@ describe("CF Node Bench workspace",()=>{
     fireEvent.click(screen.getByRole("button",{name:/取消测速/}));
     await waitFor(()=>expect(screen.getByRole("button",{name:/开始测速/})).toBeInTheDocument());
     expect(screen.getByRole("heading",{name:"测速已取消"})).toBeInTheDocument();
+    expect(screen.getByLabelText("测速阶段").children[0]).toHaveAttribute("data-state","cancelled");
+    expect(screen.getByLabelText("测速阶段").children[0]).toHaveTextContent("采样未保留");
   });
 
   it("shows a clear settings relationship error",async()=>{
@@ -47,6 +50,19 @@ describe("CF Node Bench workspace",()=>{
     expect(countryOptions.find((country)=>country.code==="CN")?.name).toContain("中国");
     const settings={...getAppState().settings,allowedCountries:["US"],blockedCountries:["US"]};
     expect(validateSettings(settings)).toBe("国家 US 不能同时出现在允许和排除列表");
+  });
+
+  it("validates score weights and restores the new defaults",async()=>{
+    render(<App/>); await screen.findByRole("heading",{name:"测速工作台"});
+    fireEvent.click(screen.getByRole("button",{name:"设置"}));
+    const bandwidth=await screen.findByLabelText("带宽权重数值");
+    expect(bandwidth).toHaveValue(40);
+    fireEvent.change(bandwidth,{target:{value:"41"}});
+    fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
+    expect(await screen.findByText("评分权重总和必须等于 100")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button",{name:/恢复默认/}));
+    expect(bandwidth).toHaveValue(DEFAULT_SCORE_WEIGHTS.bandwidth);
+    expect(screen.getByText("100%")).toHaveAttribute("data-valid","true");
   });
 
   it("selects a bandwidth preset and saves a custom HTTPS URL",async()=>{
@@ -178,7 +194,7 @@ describe("CF Node Bench workspace",()=>{
 
   it("retries a failed publication from the result view",async()=>{
     const retry=vi.spyOn(actions,"publishRun").mockResolvedValueOnce();
-    const summary={runId:"run-publish",startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),state:"completed",results:[],failures:{},publications:[{target:"github",state:"failed",items:0,message:"denied"}]} as RunSummary;
+    const summary={runId:"run-publish",startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),state:"completed",results:[],failures:{},scoreWeights:DEFAULT_SCORE_WEIGHTS,reusedStages:[],publications:[{target:"github",state:"failed",items:0,message:"denied"}]} as RunSummary;
     render(<ResultsTable summary={summary}/>);
     fireEvent.click(screen.getByRole("button",{name:"重试 github"}));
     await waitFor(()=>expect(retry).toHaveBeenCalledWith("run-publish","github"));
@@ -188,7 +204,7 @@ describe("CF Node Bench workspace",()=>{
   it("copies a stable latest-content URL for Gist results",async()=>{
     const rawURL="https://gist.githubusercontent.com/linvva/abc123/raw/1234567890abcdef1234567890abcdef12345678/ip.txt";
     const clipboard=vi.spyOn(navigator.clipboard,"writeText"); const success=vi.spyOn(toast,"success");
-    const summary={runId:"run-gist",startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),state:"completed",results:[],failures:{},publications:[{target:"gist",state:"succeeded",items:2,url:rawURL,message:"Gist 文件已更新"}]} as RunSummary;
+    const summary={runId:"run-gist",startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),state:"completed",results:[],failures:{},scoreWeights:DEFAULT_SCORE_WEIGHTS,reusedStages:[],publications:[{target:"gist",state:"succeeded",items:2,url:rawURL,message:"Gist 文件已更新"}]} as RunSummary;
     render(<ResultsTable summary={summary}/>);
     expect(screen.getByRole("link",{name:"打开 Gist Raw 文件"})).toHaveAttribute("href",rawURL);
     fireEvent.click(screen.getByRole("button",{name:"复制固定 Gist Raw 地址"}));
@@ -203,7 +219,7 @@ describe("CF Node Bench workspace",()=>{
     await screen.findByRole("heading",{name:"测速工作台"});
     fireEvent.click(screen.getByRole("button",{name:/开始测速/}));
     await screen.findByText("104.18.1.20:8443",{}, {timeout:8000});
-    const toggle=screen.getByRole("switch",{name:/下轮复测上次结果/});
+    const toggle=screen.getByRole("switch",{name:/全量测速时优先复检上轮结果/});
     expect(toggle).toBeChecked();
     const save=vi.spyOn(actions,"saveSettings");
     fireEvent.click(toggle);
@@ -217,4 +233,29 @@ describe("CF Node Bench workspace",()=>{
     expect(toggle).not.toBeChecked();
     save.mockRestore(); danger.mockRestore();
   },10000);
+
+  it("restarts from HTTPS and marks earlier stages as reused",async()=>{
+    render(<App/>);
+    await screen.findByRole("heading",{name:"测速工作台"});
+    fireEvent.click(screen.getByRole("button",{name:/开始测速/}));
+    await screen.findByText("104.18.1.20:8443",{}, {timeout:8000});
+    await waitFor(()=>expect(screen.getByRole("button",{name:/开始测速/})).toBeInTheDocument(),{timeout:8000});
+    const settings=getAppState().settings;
+    await actions.saveSettings({...settings,connectTimeoutMs:settings.connectTimeoutMs+100});
+    fireEvent.click(screen.getByRole("button",{name:"选择测速起点"}));
+    const option=await screen.findByRole("menuitem",{name:/从 HTTPS 开始/});
+    expect(option).toHaveTextContent("个输入");
+    fireEvent.click(option);
+    expect(await screen.findByRole("heading",{name:"确认使用阶段检查点"})).toBeInTheDocument();
+    expect(screen.getByText("TCP 测量或候选过滤设置已变化")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button",{name:"仍然重测"}));
+    await waitFor(()=>expect(screen.getByRole("button",{name:/取消测速/})).toBeInTheDocument());
+    const stageList=screen.getByLabelText("测速阶段");
+    await waitFor(()=>{
+      expect(stageList.children[0]).toHaveAttribute("data-state","reused");
+      expect(stageList.children[2]).toHaveAttribute("data-state","reused");
+      expect(stageList.children[3]).toHaveAttribute("data-state","running");
+    });
+    fireEvent.click(screen.getByRole("button",{name:/取消测速/}));
+  },12000);
 });

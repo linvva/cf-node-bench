@@ -7,9 +7,7 @@ import (
 	"github.com/linvva/cf-node-bench/internal/model"
 )
 
-var weights = model.ScoreParts{TCP: 0.20, HTTPS: 0.20, Jitter: 0.10, Reliability: 0.30, Bandwidth: 0.20}
-
-func Score(results []model.ProbeResult, tcpMinimumSuccessRate, httpsMinimumSuccessRate float64) []model.ProbeResult {
+func Score(results []model.ProbeResult, tcpMinimumSuccessRate, httpsMinimumSuccessRate float64, weights model.ScoreWeights) []model.ProbeResult {
 	eligible := make([]model.ProbeResult, 0, len(results))
 	for _, result := range results {
 		if result.TCP.SuccessRate < tcpMinimumSuccessRate || result.HTTPS.SuccessRate < httpsMinimumSuccessRate || result.Bandwidth.Mbps <= 0 {
@@ -34,7 +32,7 @@ func Score(results []model.ProbeResult, tcpMinimumSuccessRate, httpsMinimumSucce
 			Reliability: ((result.TCP.SuccessRate + result.HTTPS.SuccessRate) / 2) * 100,
 			Bandwidth:   higherBetter(result.Bandwidth.Mbps, bandMin, bandMax) * 100,
 		}
-		result.Score = round2(result.Parts.TCP*weights.TCP + result.Parts.HTTPS*weights.HTTPS + result.Parts.Jitter*weights.Jitter + result.Parts.Reliability*weights.Reliability + result.Parts.Bandwidth*weights.Bandwidth)
+		result.Score = round2((result.Parts.TCP*float64(weights.TCP) + result.Parts.HTTPS*float64(weights.HTTPS) + result.Parts.Jitter*float64(weights.Jitter) + result.Parts.Reliability*float64(weights.Reliability) + result.Parts.Bandwidth*float64(weights.Bandwidth)) / 100)
 		result.Status = "qualified"
 	}
 	slices.SortStableFunc(eligible, func(a, b model.ProbeResult) int {

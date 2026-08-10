@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Button, Heading, Input, Label, ListBox, Select, toast } from "@heroui/react";
-import { Save } from "lucide-react";
+import { Button, Heading, Input, Label, ListBox, Select, Slider, toast } from "@heroui/react";
+import { RotateCcw, Save } from "lucide-react";
 import { bandwidthTestURLPresets } from "../../lib/bandwidthTestUrls";
+import { DEFAULT_SCORE_WEIGHTS, scoreWeightTotal } from "../../lib/scoring";
 import { actions, useAppStore } from "../../store";
-import type { Settings } from "../../types";
+import type { ScoreWeights, Settings } from "../../types";
 import { CountryPicker } from "./CountryPicker";
 
 type IntegerSetting = "tcpConcurrency" | "httpsConcurrency" | "bandwidthConcurrency" |
@@ -82,6 +83,14 @@ export function SettingsPage() {
           <RateField label="TCP 最低成功率" value={form.tcpMinSuccessRate} onChange={(value) => setForm((current) => ({ ...current, tcpMinSuccessRate: value }))} />
           <RateField label="HTTPS 最低成功率" value={form.httpsMinSuccessRate} onChange={(value) => setForm((current) => ({ ...current, httpsMinSuccessRate: value }))} />
         </SettingsSection>
+        <SettingsSection title="评分权重" description="通过硬门槛的节点先归一化，再按以下权重计算综合分。">
+          <div className="score-weight-summary field-wide"><span>当前总和</span><strong data-valid={scoreWeightTotal(form.scoreWeights)===100}>{scoreWeightTotal(form.scoreWeights)}%</strong><Button variant="tertiary" onPress={()=>setForm(current=>({...current,scoreWeights:{...DEFAULT_SCORE_WEIGHTS}}))}><RotateCcw size={14}/>恢复默认</Button></div>
+          <WeightField label="带宽" value={form.scoreWeights.bandwidth} onChange={bandwidth=>setForm(current=>({...current,scoreWeights:{...current.scoreWeights,bandwidth}}))}/>
+          <WeightField label="HTTPS" value={form.scoreWeights.https} onChange={https=>setForm(current=>({...current,scoreWeights:{...current.scoreWeights,https}}))}/>
+          <WeightField label="TCP" value={form.scoreWeights.tcp} onChange={tcp=>setForm(current=>({...current,scoreWeights:{...current.scoreWeights,tcp}}))}/>
+          <WeightField label="可用性" value={form.scoreWeights.reliability} onChange={reliability=>setForm(current=>({...current,scoreWeights:{...current.scoreWeights,reliability}}))}/>
+          <WeightField label="抖动" value={form.scoreWeights.jitter} onChange={jitter=>setForm(current=>({...current,scoreWeights:{...current.scoreWeights,jitter}}))}/>
+        </SettingsSection>
       </div>
     </div>
   </div>;
@@ -94,6 +103,10 @@ export function validateSettings(form: Settings) {
     }
     if (form.tcpMinSuccessRate < 0.6 || form.tcpMinSuccessRate > 1) return "TCP 最低成功率必须在 60% 到 100% 之间";
     if (form.httpsMinSuccessRate < 0.6 || form.httpsMinSuccessRate > 1) return "HTTPS 最低成功率必须在 60% 到 100% 之间";
+    for(const [label,value] of Object.entries(form.scoreWeights) as [keyof ScoreWeights,number][]){
+      if(!Number.isInteger(value)||value<0||value>100)return `${{tcp:"TCP",https:"HTTPS",jitter:"抖动",reliability:"可用性",bandwidth:"带宽"}[label]}权重必须在 0 到 100 之间`;
+    }
+    if(scoreWeightTotal(form.scoreWeights)!==100)return "评分权重总和必须等于 100";
     if (form.maxDownloadBytes < 1048576 || form.maxDownloadBytes > 1073741824) return "最大下载量必须在 1 到 1024 MiB 之间";
     const bandwidthURLMessage = validateBandwidthTestURL(form.bandwidthTestUrl);
     if (bandwidthURLMessage) return bandwidthURLMessage;
@@ -105,6 +118,10 @@ export function validateSettings(form: Settings) {
     const conflict = form.allowedCountries.find((country) => blocked.has(country));
     if (conflict) return `国家 ${conflict} 不能同时出现在允许和排除列表`;
     return "";
+}
+
+function WeightField({label,value,onChange}:{label:string;value:number;onChange:(value:number)=>void}){
+  return <div className="field field-wide score-weight-field"><div className="score-weight-label"><label>{label}</label><Input type="number" aria-label={`${label}权重数值`} value={String(value)} min={0} max={100} onChange={event=>onChange(Number(event.target.value))}/></div><Slider aria-label={`${label}权重`} value={value} minValue={0} maxValue={100} step={1} onChange={next=>onChange(Number(next))}><Slider.Track><Slider.Fill/><Slider.Thumb/></Slider.Track></Slider></div>;
 }
 
 export function validateBandwidthTestURL(value: string) {

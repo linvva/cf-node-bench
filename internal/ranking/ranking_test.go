@@ -3,6 +3,7 @@ package ranking
 import (
 	"testing"
 
+	"github.com/linvva/cf-node-bench/internal/config"
 	"github.com/linvva/cf-node-bench/internal/model"
 )
 
@@ -12,7 +13,7 @@ func TestScoreUsesHardAvailabilityGate(t *testing.T) {
 		result("balanced", 1, 20, 30, 100),
 		result("slower", 1, 40, 50, 50),
 	}
-	ranked := Score(results, 2.0/3.0, 2.0/3.0)
+	ranked := Score(results, 2.0/3.0, 2.0/3.0, config.DefaultScoreWeights())
 	if len(ranked) != 2 {
 		t.Fatalf("got %d eligible results", len(ranked))
 	}
@@ -32,9 +33,21 @@ func TestScoreUsesIndependentSuccessThresholds(t *testing.T) {
 		resultWithRates("https-weak", 1, 0.7),
 		resultWithRates("stable", 0.9, 0.9),
 	}
-	ranked := Score(results, 0.8, 0.8)
+	ranked := Score(results, 0.8, 0.8, config.DefaultScoreWeights())
 	if len(ranked) != 1 || ranked[0].Candidate.IP != "stable" {
 		t.Fatalf("unexpected ranked results: %+v", ranked)
+	}
+}
+
+func TestScoreUsesConfiguredWeights(t *testing.T) {
+	results := []model.ProbeResult{
+		result("fast", 1, 10, 10, 10),
+		result("wide", 1, 40, 40, 100),
+	}
+	latencyFirst := Score(results, 1, 1, model.ScoreWeights{TCP: 100})
+	bandwidthFirst := Score(results, 1, 1, model.ScoreWeights{Bandwidth: 100})
+	if latencyFirst[0].Candidate.IP != "fast" || bandwidthFirst[0].Candidate.IP != "wide" {
+		t.Fatalf("configured weights did not change ordering: latency=%s bandwidth=%s", latencyFirst[0].Candidate.IP, bandwidthFirst[0].Candidate.IP)
 	}
 }
 

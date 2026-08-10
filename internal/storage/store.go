@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/linvva/cf-node-bench/internal/config"
 	"github.com/linvva/cf-node-bench/internal/model"
 	"github.com/linvva/cf-node-bench/internal/publish"
+	runengine "github.com/linvva/cf-node-bench/internal/run"
 	"github.com/linvva/cf-node-bench/internal/source"
 )
 
@@ -78,6 +80,12 @@ func (s *Store) normalize() {
 		}
 		if s.data.History[index].Publications == nil {
 			s.data.History[index].Publications = []model.PublicationResult{}
+		}
+		if s.data.History[index].ScoreWeights == (model.ScoreWeights{}) {
+			s.data.History[index].ScoreWeights = config.LegacyScoreWeights()
+		}
+		if s.data.History[index].ReusedStages == nil {
+			s.data.History[index].ReusedStages = []string{}
 		}
 	}
 }
@@ -264,6 +272,59 @@ func (s *Store) persistLocked() error {
 		return err
 	}
 	return os.Rename(temporary, s.path)
+}
+
+func (s *Store) SaveCheckpoint(checkpoint runengine.Checkpoint) error {
+	checkpoint.Version = runengine.CheckpointVersion
+	checkpoint.UpdatedAt = time.Now()
+	path := filepath.Join(filepath.Dir(s.path), "checkpoint.json.gz")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	temporary := path + ".tmp"
+	file, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	writer := gzip.NewWriter(file)
+	encodeErr := json.NewEncoder(writer).Encode(checkpoint)
+	closeGzipErr := writer.Close()
+	closeFileErr := file.Close()
+	if encodeErr != nil {
+		return encodeErr
+	}
+	if closeGzipErr != nil {
+		return closeGzipErr
+	}
+	if closeFileErr != nil {
+		return closeFileErr
+	}
+	return os.Rename(temporary, path)
+}
+
+func (s *Store) Checkpoint() (runengine.Checkpoint, bool, error) {
+	path := filepath.Join(filepath.Dir(s.path), "checkpoint.json.gz")
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return runengine.Checkpoint{}, false, nil
+	}
+	if err != nil {
+		return runengine.Checkpoint{}, false, err
+	}
+	defer file.Close()
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		return runengine.Checkpoint{}, false, err
+	}
+	defer reader.Close()
+	var checkpoint runengine.Checkpoint
+	if err := json.NewDecoder(reader).Decode(&checkpoint); err != nil {
+		return runengine.Checkpoint{}, false, err
+	}
+	if checkpoint.Version != runengine.CheckpointVersion {
+		return runengine.Checkpoint{}, false, errors.New("检查点版本不兼容")
+	}
+	return checkpoint, true, nil
 }
 
 func defaultSources() []source.HTTPSource {

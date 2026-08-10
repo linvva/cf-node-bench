@@ -75,6 +75,14 @@ type ScoreParts struct {
 	Bandwidth   float64 `json:"bandwidth"`
 }
 
+type ScoreWeights struct {
+	TCP         int `json:"tcp"`
+	HTTPS       int `json:"https"`
+	Jitter      int `json:"jitter"`
+	Reliability int `json:"reliability"`
+	Bandwidth   int `json:"bandwidth"`
+}
+
 type ProbeResult struct {
 	Candidate Candidate      `json:"candidate"`
 	TCP       ProbeStats     `json:"tcp"`
@@ -86,33 +94,40 @@ type ProbeResult struct {
 }
 
 type StageProgress struct {
-	Name              string `json:"name"`
-	Input             int    `json:"input"`
-	Passed            int    `json:"passed"`
-	Failed            int    `json:"failed"`
-	AttemptsCompleted int    `json:"attemptsCompleted,omitempty"`
-	AttemptsTotal     int    `json:"attemptsTotal,omitempty"`
-	DurationMS        int64  `json:"durationMs"`
-	State             string `json:"state"`
+	Name              string    `json:"name"`
+	Input             int       `json:"input"`
+	Passed            int       `json:"passed"`
+	Failed            int       `json:"failed"`
+	AttemptsCompleted int       `json:"attemptsCompleted,omitempty"`
+	AttemptsTotal     int       `json:"attemptsTotal,omitempty"`
+	DurationMS        int64     `json:"durationMs"`
+	State             string    `json:"state"`
+	MeasuredAt        time.Time `json:"measuredAt,omitempty"`
 }
 
 type RunProgress struct {
-	RunID     string                `json:"runId"`
-	State     string                `json:"state"`
-	StartedAt time.Time             `json:"startedAt"`
-	Stages    []StageProgress       `json:"stages"`
-	Failures  map[FailureReason]int `json:"failures"`
-	Message   string                `json:"message,omitempty"`
+	RunID             string                `json:"runId"`
+	State             string                `json:"state"`
+	StartedAt         time.Time             `json:"startedAt"`
+	Stages            []StageProgress       `json:"stages"`
+	Failures          map[FailureReason]int `json:"failures"`
+	Message           string                `json:"message,omitempty"`
+	CheckpointWarning string                `json:"checkpointWarning,omitempty"`
 }
 
 type RunSummary struct {
-	RunID        string                `json:"runId"`
-	StartedAt    time.Time             `json:"startedAt"`
-	FinishedAt   time.Time             `json:"finishedAt"`
-	State        string                `json:"state"`
-	Results      []ProbeResult         `json:"results"`
-	Failures     map[FailureReason]int `json:"failures"`
-	Publications []PublicationResult   `json:"publications"`
+	RunID             string                `json:"runId"`
+	StartedAt         time.Time             `json:"startedAt"`
+	FinishedAt        time.Time             `json:"finishedAt"`
+	State             string                `json:"state"`
+	Results           []ProbeResult         `json:"results"`
+	Failures          map[FailureReason]int `json:"failures"`
+	Publications      []PublicationResult   `json:"publications"`
+	ScoreWeights      ScoreWeights          `json:"scoreWeights"`
+	ParentRunID       string                `json:"parentRunId,omitempty"`
+	StartStage        string                `json:"startStage,omitempty"`
+	ReusedStages      []string              `json:"reusedStages,omitempty"`
+	CheckpointWarning string                `json:"checkpointWarning,omitempty"`
 }
 
 type PublicationResult struct {

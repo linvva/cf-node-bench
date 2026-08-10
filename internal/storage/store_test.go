@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"compress/gzip"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,8 +11,86 @@ import (
 	"github.com/linvva/cf-node-bench/internal/config"
 	"github.com/linvva/cf-node-bench/internal/model"
 	"github.com/linvva/cf-node-bench/internal/publish"
+	runengine "github.com/linvva/cf-node-bench/internal/run"
 	"github.com/linvva/cf-node-bench/internal/source"
 )
+
+func TestCheckpointPersistsAcrossStoreReopen(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := runengine.Checkpoint{
+		RunID: "run-checkpoint", Candidates: []model.Candidate{{AddressType: model.AddressIPv4, IP: "1.1.1.1", Port: 443}},
+		Stages: []model.StageProgress{{Name: "source", Input: 1, Passed: 1, State: "completed"}}, CompletedAt: map[string]time.Time{"source": time.Now()},
+	}
+	if err := store.SaveCheckpoint(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint.RunID = "run-replacement"
+	checkpoint.Candidates = append(checkpoint.Candidates, model.Candidate{AddressType: model.AddressIPv4, IP: "1.1.1.2", Port: 443})
+	if err := store.SaveCheckpoint(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(filepath.Join(dir, "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, ok, err := reopened.Checkpoint()
+	if err != nil || !ok {
+		t.Fatalf("checkpoint was not loaded: ok=%v err=%v", ok, err)
+	}
+	if loaded.Version != runengine.CheckpointVersion || loaded.RunID != checkpoint.RunID || len(loaded.Candidates) != 2 || loaded.UpdatedAt.IsZero() {
+		t.Fatalf("unexpected checkpoint: %+v", loaded)
+	}
+	info, err := os.Stat(filepath.Join(dir, "checkpoint.json.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("checkpoint mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestCheckpointRejectsCorruptData(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "checkpoint.json.gz"), []byte("not gzip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.Checkpoint(); err == nil || ok {
+		t.Fatalf("corrupt checkpoint was accepted: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestCheckpointRejectsIncompatibleVersion(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(filepath.Join(dir, "checkpoint.json.gz"), os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := gzip.NewWriter(file)
+	if err := json.NewEncoder(writer).Encode(runengine.Checkpoint{Version: runengine.CheckpointVersion + 1, RunID: "future"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.Checkpoint(); err == nil || ok {
+		t.Fatalf("incompatible checkpoint was accepted: ok=%v err=%v", ok, err)
+	}
+}
 
 func TestDefaultDirUsesStableApplicationName(t *testing.T) {
 	configDir, err := os.UserConfigDir()
@@ -70,6 +150,12 @@ func TestOpenNormalizesLegacyNullCollections(t *testing.T) {
 	}
 	if !settings.RetainPreviousResults {
 		t.Fatal("legacy settings did not enable previous-result retention")
+	}
+	if settings.ScoreWeights != config.DefaultScoreWeights() {
+		t.Fatalf("legacy settings did not receive new default weights: %+v", settings.ScoreWeights)
+	}
+	if store.History()[0].ScoreWeights != config.LegacyScoreWeights() {
+		t.Fatalf("legacy history did not retain old score formula: %+v", store.History()[0].ScoreWeights)
 	}
 }
 

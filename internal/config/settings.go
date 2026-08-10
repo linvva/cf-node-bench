@@ -6,33 +6,36 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/linvva/cf-node-bench/internal/model"
 )
 
 const DefaultBandwidthTestURL = "https://speed.cloudflare.com/__down?bytes=99999999"
 
 type Settings struct {
-	TCPConcurrency        int      `json:"tcpConcurrency"`
-	HTTPSConcurrency      int      `json:"httpsConcurrency"`
-	BandwidthConcurrency  int      `json:"bandwidthConcurrency"`
-	ConnectTimeoutMS      int      `json:"connectTimeoutMs"`
-	RequestTimeoutMS      int      `json:"requestTimeoutMs"`
-	BandwidthTimeoutMS    int      `json:"bandwidthTimeoutMs"`
-	SourceTimeoutMS       int      `json:"sourceTimeoutMs"`
-	SourceRetries         int      `json:"sourceRetries"`
-	TCPProbeCount         int      `json:"tcpProbeCount"`
-	HTTPSProbeCount       int      `json:"httpsProbeCount"`
-	TCPMinSuccessRate     float64  `json:"tcpMinSuccessRate"`
-	HTTPSMinSuccessRate   float64  `json:"httpsMinSuccessRate"`
-	TCPCandidateCount     int      `json:"tcpCandidateCount"`
-	BandwidthCandidates   int      `json:"bandwidthCandidates"`
-	FinalResultCount      int      `json:"finalResultCount"`
-	MaxDownloadBytes      int64    `json:"maxDownloadBytes"`
-	BandwidthTestURL      string   `json:"bandwidthTestUrl"`
-	RetainPreviousResults bool     `json:"retainPreviousResults"`
-	AllowedPorts          []int    `json:"allowedPorts"`
-	AllowedCountries      []string `json:"allowedCountries"`
-	BlockedCountries      []string `json:"blockedCountries"`
-	LegacyProbeCount      int      `json:"probeCount,omitempty"`
+	TCPConcurrency        int                `json:"tcpConcurrency"`
+	HTTPSConcurrency      int                `json:"httpsConcurrency"`
+	BandwidthConcurrency  int                `json:"bandwidthConcurrency"`
+	ConnectTimeoutMS      int                `json:"connectTimeoutMs"`
+	RequestTimeoutMS      int                `json:"requestTimeoutMs"`
+	BandwidthTimeoutMS    int                `json:"bandwidthTimeoutMs"`
+	SourceTimeoutMS       int                `json:"sourceTimeoutMs"`
+	SourceRetries         int                `json:"sourceRetries"`
+	TCPProbeCount         int                `json:"tcpProbeCount"`
+	HTTPSProbeCount       int                `json:"httpsProbeCount"`
+	TCPMinSuccessRate     float64            `json:"tcpMinSuccessRate"`
+	HTTPSMinSuccessRate   float64            `json:"httpsMinSuccessRate"`
+	TCPCandidateCount     int                `json:"tcpCandidateCount"`
+	BandwidthCandidates   int                `json:"bandwidthCandidates"`
+	FinalResultCount      int                `json:"finalResultCount"`
+	MaxDownloadBytes      int64              `json:"maxDownloadBytes"`
+	BandwidthTestURL      string             `json:"bandwidthTestUrl"`
+	RetainPreviousResults bool               `json:"retainPreviousResults"`
+	ScoreWeights          model.ScoreWeights `json:"scoreWeights"`
+	AllowedPorts          []int              `json:"allowedPorts"`
+	AllowedCountries      []string           `json:"allowedCountries"`
+	BlockedCountries      []string           `json:"blockedCountries"`
+	LegacyProbeCount      int                `json:"probeCount,omitempty"`
 }
 
 func DefaultSettings() Settings {
@@ -46,9 +49,18 @@ func DefaultSettings() Settings {
 		FinalResultCount: 15, MaxDownloadBytes: 20 * 1024 * 1024,
 		BandwidthTestURL:      DefaultBandwidthTestURL,
 		RetainPreviousResults: true,
+		ScoreWeights:          DefaultScoreWeights(),
 		AllowedPorts:          []int{443, 8443, 2053, 2083, 2087, 2096},
 		AllowedCountries:      []string{}, BlockedCountries: []string{},
 	}
+}
+
+func DefaultScoreWeights() model.ScoreWeights {
+	return model.ScoreWeights{Bandwidth: 40, HTTPS: 25, TCP: 15, Reliability: 15, Jitter: 5}
+}
+
+func LegacyScoreWeights() model.ScoreWeights {
+	return model.ScoreWeights{TCP: 20, HTTPS: 20, Jitter: 10, Reliability: 30, Bandwidth: 20}
 }
 
 func (s *Settings) MigrateLegacy() {
@@ -59,6 +71,9 @@ func (s *Settings) MigrateLegacy() {
 	}
 	if strings.TrimSpace(s.BandwidthTestURL) == "" {
 		s.BandwidthTestURL = DefaultBandwidthTestURL
+	}
+	if scoreWeightTotal(s.ScoreWeights) == 0 {
+		s.ScoreWeights = DefaultScoreWeights()
 	}
 }
 
@@ -102,6 +117,18 @@ func (s Settings) Validate() error {
 	if s.FinalResultCount > s.BandwidthCandidates {
 		return fmt.Errorf("最终结果数不能大于带宽目标通过数")
 	}
+	weights := []struct {
+		name  string
+		value int
+	}{{"TCP", s.ScoreWeights.TCP}, {"HTTPS", s.ScoreWeights.HTTPS}, {"抖动", s.ScoreWeights.Jitter}, {"可用性", s.ScoreWeights.Reliability}, {"带宽", s.ScoreWeights.Bandwidth}}
+	for _, weight := range weights {
+		if weight.value < 0 || weight.value > 100 {
+			return fmt.Errorf("%s 权重必须在 0 到 100 之间", weight.name)
+		}
+	}
+	if scoreWeightTotal(s.ScoreWeights) != 100 {
+		return fmt.Errorf("评分权重总和必须等于 100")
+	}
 	for _, port := range s.AllowedPorts {
 		if port < 1 || port > 65535 {
 			return fmt.Errorf("端口必须在 1 到 65535 之间")
@@ -119,6 +146,10 @@ func (s Settings) Validate() error {
 		}
 	}
 	return nil
+}
+
+func scoreWeightTotal(weights model.ScoreWeights) int {
+	return weights.TCP + weights.HTTPS + weights.Jitter + weights.Reliability + weights.Bandwidth
 }
 
 func validateBandwidthTestURL(raw string) error {

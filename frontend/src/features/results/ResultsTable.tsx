@@ -64,7 +64,7 @@ export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: 
     setSavingRetention(true);
     try{
       await actions.saveSettings({...settings,retainPreviousResults:value});
-      toast.success(value?`下轮将复测上次的 ${retainedCount} 个结果`:"已关闭上轮结果复测");
+      toast.success(value?`全量测速时将优先复检上轮的 ${retainedCount} 个结果`:"已关闭全量测速的上轮复检");
     }catch(reason){
       toast.danger(`保存失败：${String(reason)}`);
     }finally{
@@ -78,7 +78,7 @@ export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: 
     <div className="results-toolbar">
       <Input className="search" aria-label="筛选节点" placeholder="筛选 IP、端口或国家" value={query} onChange={(event) => setQuery(event.target.value)} />
       <Button variant="secondary" onPress={() => setSort(sort === "score" ? "tcp" : sort === "tcp" ? "https" : sort === "https" ? "bandwidth" : "score")}>排序：{{ score: "综合分", tcp: "TCP P95", https: "HTTPS P95", bandwidth: "带宽" }[sort]}</Button>
-      {retainedCount>0&&<Switch className="retention-switch" aria-label={`下轮复测上次结果，${retainedCount} 个节点`} isSelected={settings.retainPreviousResults} isDisabled={savingRetention} onChange={value=>void toggleRetention(value)}><Switch.Content><Switch.Control><Switch.Thumb/></Switch.Control><span>下轮复测上次结果（{retainedCount}）</span></Switch.Content></Switch>}
+      {retainedCount>0&&<Switch className="retention-switch" aria-label={`全量测速时优先复检上轮结果，${retainedCount} 个节点`} isSelected={settings.retainPreviousResults} isDisabled={savingRetention} onChange={value=>void toggleRetention(value)}><Switch.Content><Switch.Control><Switch.Thumb/></Switch.Control><span>全量测速时复检上轮（{retainedCount}）</span></Switch.Content></Switch>}
       <span className="spacer" /><span className="results-summary">{selectedKeys.size ? `已选 ${selectedKeys.size}` : `${results.length} 个节点`}</span>
       <Popover><Popover.Trigger><Button isIconOnly variant="tertiary" aria-label="复制选项" isDisabled={!results.length}><SlidersHorizontal size={15} /></Button></Popover.Trigger><Popover.Content isNonModal placement="bottom end"><Popover.Dialog className="copy-options"><Popover.Heading>复制内容</Popover.Heading><div className="copy-options-list">
         <CopyOption label="国家代码" selected={copyFields.country} onChange={(country) => setCopyFields((fields) => ({ ...fields, country }))} />
@@ -102,7 +102,13 @@ export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: 
     {selected && <Drawer isOpen onOpenChange={(open) => { if (!open) setSelected(undefined); }}><Drawer.Trigger className="sr-only" aria-label="节点明细"><span /></Drawer.Trigger><Drawer.Backdrop><Drawer.Content className="result-drawer" placement="right"><Drawer.Dialog><Drawer.Header><Drawer.Heading>{keyOf(selected)}</Drawer.Heading><Drawer.CloseTrigger aria-label="关闭"><X size={17} /></Drawer.CloseTrigger></Drawer.Header><Drawer.Body>
       <p className="source-meta">{selected.candidate.country || "未知国家"} · {selected.candidate.addressType.toUpperCase()} · {selected.candidate.sourceId}</p>
       <div className="drawer-grid"><Metric label="TCP 成功率" value={percent(selected.tcp.successRate)} /><Metric label="TCP P50 / P95" value={`${ms(selected.tcp.p50Ms)} / ${ms(selected.tcp.p95Ms)}`} /><Metric label="HTTPS 成功率" value={percent(selected.https.successRate)} /><Metric label="HTTP 平均延迟" value={ms(selected.https.averageMs)} /><Metric label="HTTPS 抖动" value={ms(selected.https.jitterMs)} /><Metric label="下载带宽" value={`${selected.bandwidth.mbps.toFixed(1)} Mbps`} /><Metric label="首字节" value={ms(selected.bandwidth.ttfbMs)} /><Metric label="实际下载" value={`${(selected.bandwidth.bytes / 1048576).toFixed(1)} MiB`} /></div>
-      <div className="score-breakdown"><h3>评分明细 · {selected.score.toFixed(1)}</h3>{Object.entries({ TCP: selected.parts.tcp, HTTPS: selected.parts.https, 抖动: selected.parts.jitter, 可用性: selected.parts.reliability, 带宽: selected.parts.bandwidth }).map(([label, value]) => <div className="score-row" key={label}><span>{label}</span><div className="score-track"><div className="score-fill" style={{ width: `${value}%` }} /></div><b>{value.toFixed(0)}</b></div>)}</div>
+      <div className="score-breakdown"><h3>评分明细 · {selected.score.toFixed(1)}</h3>{([
+        ["TCP",selected.parts.tcp,summary?.scoreWeights.tcp??0],
+        ["HTTPS",selected.parts.https,summary?.scoreWeights.https??0],
+        ["抖动",selected.parts.jitter,summary?.scoreWeights.jitter??0],
+        ["可用性",selected.parts.reliability,summary?.scoreWeights.reliability??0],
+        ["带宽",selected.parts.bandwidth,summary?.scoreWeights.bandwidth??0],
+      ] as [string,number,number][]).map(([label,value,weight]) => <div className="score-row" key={label}><span>{label}</span><div className="score-track"><div className="score-fill" style={{ width: `${value}%` }} /></div><b>{value.toFixed(0)} × {weight}% = {(value*weight/100).toFixed(1)}</b></div>)}</div>
     </Drawer.Body></Drawer.Dialog></Drawer.Content></Drawer.Backdrop></Drawer>}
   </section>;
 });

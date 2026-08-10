@@ -31,6 +31,7 @@ type Bootstrap struct {
 	History         []model.RunSummary   `json:"history"`
 	Network         NetworkInfo          `json:"network"`
 	Current         string               `json:"currentRunId,omitempty"`
+	Resume          runengine.ResumeInfo `json:"resume"`
 }
 
 type App struct {
@@ -79,7 +80,8 @@ func (f trackingFetcher) Fetch(ctx context.Context, current source.HTTPSource) (
 func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 
 func (a *App) Bootstrap() Bootstrap {
-	return Bootstrap{Settings: a.store.Settings(), PublishSettings: a.store.PublishSettingsView(), Sources: a.store.Sources(), History: a.store.History(), Network: detectNetwork(), Current: a.manager.Current()}
+	network := detectNetwork()
+	return Bootstrap{Settings: a.store.Settings(), PublishSettings: a.store.PublishSettingsView(), Sources: a.store.Sources(), History: a.store.History(), Network: network, Current: a.manager.Current(), Resume: a.resumeInfo(network)}
 }
 
 func (a *App) SaveSettings(settings config.Settings) error { return a.store.SaveSettings(settings) }
@@ -145,7 +147,7 @@ func (a *App) SaveSources(sources []source.HTTPSource) error {
 	return a.store.SaveSources(sources)
 }
 
-func (a *App) StartRun() (string, error) {
+func (a *App) StartRun(request runengine.StartRequest) (string, error) {
 	a.mu.Lock()
 	settings := a.store.Settings()
 	a.engine.Dependencies.Fetcher = newTrackingFetcher(a.store, settings)
@@ -153,11 +155,46 @@ func (a *App) StartRun() (string, error) {
 	a.engine.Dependencies.HTTPS = probe.HTTPSProber{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout()}
 	a.engine.Dependencies.Bandwidth = probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.BandwidthTestURL}
 	a.mu.Unlock()
+	stage := request.StartStage
+	if stage == "" {
+		stage = runengine.StageSource
+	}
+	if !runengine.ValidStartStage(stage) {
+		return "", fmt.Errorf("未知测速起点")
+	}
+	network := detectNetwork()
+	networkSnapshot := runengine.NetworkSnapshot{Interface: network.Interface, IPv4: network.IPv4}
+	var base *runengine.Checkpoint
 	retained := []model.ProbeResult{}
-	if settings.RetainPreviousResults {
+	if stage == runengine.StageSource && settings.RetainPreviousResults {
 		retained = a.store.LatestCompletedResults()
 	}
-	input := runengine.RunInput{Sources: a.store.Sources(), Retained: retained}
+	if stage != runengine.StageSource {
+		checkpoint, ok, err := a.store.Checkpoint()
+		if err != nil {
+			return "", fmt.Errorf("无法读取阶段检查点：%w", err)
+		}
+		if !ok || request.BaseRunID == "" || checkpoint.RunID != request.BaseRunID {
+			return "", fmt.Errorf("阶段检查点已变化，请刷新后重试")
+		}
+		currentRunID := a.latestRunID()
+		info := runengine.BuildResumeInfo(checkpoint, currentRunID, settings, a.store.Sources(), networkSnapshot, time.Now())
+		var selected *runengine.ResumeOption
+		for index := range info.Options {
+			if info.Options[index].Stage == stage {
+				selected = &info.Options[index]
+				break
+			}
+		}
+		if selected == nil || !selected.Available {
+			return "", fmt.Errorf("当前检查点不能从该阶段重测")
+		}
+		if len(selected.Warnings) > 0 && !request.AllowStaleCheckpoint {
+			return "", fmt.Errorf("阶段检查点需要确认：%s", strings.Join(selected.Warnings, "；"))
+		}
+		base = &checkpoint
+	}
+	input := runengine.RunInput{Sources: a.store.Sources(), Retained: retained, Plan: runengine.RunPlan{StartStage: stage, Base: base, Network: networkSnapshot, Save: a.store.SaveCheckpoint}}
 	return a.manager.Start(a.ctx, a.engine, settings, input, func(progress model.RunProgress) {
 		runtime.EventsEmit(a.ctx, "run:progress", progress)
 	}, func(summary model.RunSummary) {
@@ -167,6 +204,26 @@ func (a *App) StartRun() (string, error) {
 			_ = a.queue.Enqueue(a.appContext(), summary, a.store.PublishSettings(), "all")
 		}
 	})
+}
+
+func (a *App) latestRunID() string {
+	history := a.store.History()
+	if len(history) == 0 {
+		return ""
+	}
+	return history[0].RunID
+}
+
+func (a *App) resumeInfo(network NetworkInfo) runengine.ResumeInfo {
+	checkpoint, ok, err := a.store.Checkpoint()
+	if err != nil {
+		return runengine.ResumeInfo{Options: []runengine.ResumeOption{}, Error: "无法读取阶段检查点：" + err.Error()}
+	}
+	if !ok {
+		return runengine.ResumeInfo{Options: []runengine.ResumeOption{}}
+	}
+	snapshot := runengine.NetworkSnapshot{Interface: network.Interface, IPv4: network.IPv4}
+	return runengine.BuildResumeInfo(checkpoint, a.latestRunID(), a.store.Settings(), a.store.Sources(), snapshot, time.Now())
 }
 
 func (a *App) CancelRun() bool { return a.manager.Cancel() }

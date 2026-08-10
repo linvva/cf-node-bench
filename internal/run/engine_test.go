@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -170,6 +171,53 @@ type fakeBandwidth struct{}
 
 func (fakeBandwidth) Probe(context.Context, model.Candidate) model.BandwidthStats {
 	return model.BandwidthStats{Bytes: 1024, Mbps: 100}
+}
+
+type blockingHTTPS struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (f *blockingHTTPS) Probe(ctx context.Context, _ model.Candidate, attempts int, _ func()) model.ProbeStats {
+	f.once.Do(func() { close(f.started) })
+	<-ctx.Done()
+	return model.ProbeStats{Attempts: attempts, Failures: map[model.FailureReason]int{model.FailureCancelled: 1}}
+}
+
+func TestCancelledStageDoesNotPersistPartialSamples(t *testing.T) {
+	settings := config.DefaultSettings()
+	settings.TCPConcurrency = 1
+	settings.HTTPSConcurrency = 1
+	probe := &blockingHTTPS{started: make(chan struct{})}
+	engine := Engine{Dependencies: Dependencies{Fetcher: fakeFetcher{}, TCP: fakeTCP{}, HTTPS: probe, Bandwidth: fakeBandwidth{}}}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan model.RunSummary, 1)
+	var checkpoints []Checkpoint
+	go func() {
+		done <- engine.Run(ctx, "cancel-https", settings, RunInput{
+			Sources: []source.HTTPSource{{Enabled: true}},
+			Plan: RunPlan{StartStage: StageSource, Save: func(checkpoint Checkpoint) error {
+				checkpoints = append(checkpoints, checkpoint)
+				return nil
+			}},
+		}, nil)
+	}()
+	<-probe.started
+	cancel()
+	summary := <-done
+	if summary.State != "cancelled" || len(checkpoints) == 0 {
+		t.Fatalf("unexpected cancelled run: summary=%+v checkpoints=%d", summary, len(checkpoints))
+	}
+	last := checkpoints[len(checkpoints)-1]
+	if len(last.TCPResults) != 1 || len(last.HTTPSResults) != 0 {
+		t.Fatalf("partial HTTPS samples were persisted: %+v", last)
+	}
+	if _, ok := last.Stage("tcp"); !ok {
+		t.Fatal("completed TCP stage is missing from checkpoint")
+	}
+	if _, ok := last.Stage("https"); ok {
+		t.Fatal("cancelled HTTPS stage was marked reusable")
+	}
 }
 
 type selectiveBandwidth struct {
@@ -504,6 +552,91 @@ func TestEngineCancellation(t *testing.T) {
 	}
 }
 
+type countingFetcher struct{ calls *int }
+
+func (f countingFetcher) Fetch(context.Context, source.HTTPSource) (source.ParseResult, error) {
+	*f.calls++
+	return source.ParseResult{}, nil
+}
+
+type countingHTTPS struct{ calls *int }
+
+func (f countingHTTPS) Probe(_ context.Context, _ model.Candidate, attempts int, onAttempt func()) model.ProbeStats {
+	*f.calls++
+	for range attempts {
+		onAttempt()
+	}
+	return model.ProbeStats{Attempts: attempts, Successes: attempts, SuccessRate: 1, P95MS: 20}
+}
+
+type countingBandwidth struct{ calls *int }
+
+func (f countingBandwidth) Probe(context.Context, model.Candidate) model.BandwidthStats {
+	*f.calls++
+	return model.BandwidthStats{Bytes: 1024, Mbps: 100}
+}
+
+func TestResumeStagesDoNotCallReusedProbes(t *testing.T) {
+	settings := config.DefaultSettings()
+	settings.TCPConcurrency = 1
+	settings.HTTPSConcurrency = 1
+	settings.BandwidthConcurrency = 1
+	settings.TCPCandidateCount = 2
+	settings.BandwidthCandidates = 2
+	settings.FinalResultCount = 2
+	base := reusableCheckpoint(settings)
+	tests := []struct {
+		stage                              string
+		wantHTTPSCalls, wantBandwidthCalls int
+	}{
+		{StageHTTPS, 2, 2},
+		{StageBandwidth, 0, 2},
+		{StageRanking, 0, 0},
+	}
+	for _, test := range tests {
+		t.Run(test.stage, func(t *testing.T) {
+			fetchCalls, tcpCalls, httpsCalls, bandwidthCalls := 0, 0, 0, 0
+			engine := Engine{Dependencies: Dependencies{
+				Fetcher: countingFetcher{calls: &fetchCalls}, TCP: fakeTCP{attempts: &tcpCalls}, HTTPS: countingHTTPS{calls: &httpsCalls}, Bandwidth: countingBandwidth{calls: &bandwidthCalls},
+			}}
+			summary := engine.Run(t.Context(), "resumed", settings, RunInput{Plan: RunPlan{StartStage: test.stage, Base: &base}}, nil)
+			if fetchCalls != 0 || tcpCalls != 0 || httpsCalls != test.wantHTTPSCalls || bandwidthCalls != test.wantBandwidthCalls {
+				t.Fatalf("unexpected calls: fetch=%d tcp=%d https=%d bandwidth=%d", fetchCalls, tcpCalls, httpsCalls, bandwidthCalls)
+			}
+			if summary.State != "completed" || summary.ParentRunID != base.RunID || summary.StartStage != test.stage || len(summary.Results) != 2 {
+				t.Fatalf("unexpected resumed summary: %+v", summary)
+			}
+		})
+	}
+}
+
+func reusableCheckpoint(settings config.Settings) Checkpoint {
+	now := time.Now()
+	candidates := []model.Candidate{
+		{AddressType: model.AddressIPv4, IP: "1.1.1.1", Port: 443},
+		{AddressType: model.AddressIPv4, IP: "1.1.1.2", Port: 443},
+	}
+	results := make([]model.ProbeResult, 0, len(candidates))
+	for index, candidate := range candidates {
+		results = append(results, model.ProbeResult{
+			Candidate: candidate,
+			TCP:       model.ProbeStats{Attempts: 3, Successes: 3, SuccessRate: 1, P95MS: float64(10 + index)},
+			HTTPS:     model.ProbeStats{Attempts: 3, Successes: 3, SuccessRate: 1, P95MS: float64(20 + index)},
+			Bandwidth: model.BandwidthStats{Bytes: 1024, Mbps: float64(100 - index)},
+		})
+	}
+	return Checkpoint{
+		Version: CheckpointVersion, RunID: "base", UpdatedAt: now, Settings: settings, Candidates: candidates,
+		TCPResults: append([]model.ProbeResult(nil), results...), HTTPSResults: append([]model.ProbeResult(nil), results...), BandwidthResults: append([]model.ProbeResult(nil), results...),
+		Stages: []model.StageProgress{
+			{Name: "source", Input: 2, Passed: 2, State: "completed"}, {Name: "filter", Input: 2, Passed: 2, State: "completed"},
+			{Name: "tcp", Input: 2, Passed: 2, State: "completed"}, {Name: "https", Input: 2, Passed: 2, State: "completed"},
+			{Name: "retained", State: "skipped"}, {Name: "bandwidth", Input: 2, Passed: 2, State: "completed"},
+		},
+		CompletedAt: map[string]time.Time{"source": now, "filter": now, "tcp": now, "https": now, "retained": now, "bandwidth": now},
+	}
+}
+
 func TestProgressEmitsOutsideStateLock(t *testing.T) {
 	var progress *progressTracker
 	emittedWhileLocked := false
@@ -518,6 +651,17 @@ func TestProgressEmitsOutsideStateLock(t *testing.T) {
 	progress.summary(time.Now(), nil, "completed")
 	if emittedWhileLocked {
 		t.Fatal("progress event emitted while holding the state lock")
+	}
+}
+
+func TestCancelledProgressMarksRunningStageIncomplete(t *testing.T) {
+	var updates []model.RunProgress
+	progress := newProgress("cancelled-progress", time.Now(), func(value model.RunProgress) { updates = append(updates, value) })
+	progress.start("tcp", 2)
+	progress.summary(time.Now(), nil, "cancelled")
+	last := updates[len(updates)-1]
+	if last.Stages[0].State != "cancelled" {
+		t.Fatalf("cancelled stage was reported as %q", last.Stages[0].State)
 	}
 }
 
