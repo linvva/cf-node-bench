@@ -11,6 +11,23 @@ import (
 
 func FormatResult(result model.ProbeResult, fields OutputFields) string {
 	base := result.Candidate.Key()
+	if model.NormalizeMode(result.Mode) == model.ModeH3 {
+		labels := []string{}
+		if fields.Country && result.Candidate.Country != "" {
+			labels = append(labels, result.Candidate.Country)
+		}
+		labels = append(labels, "H3")
+		if fields.TCPP95 {
+			labels = append(labels, "QUIC"+compact(result.QUIC.P95MS)+"ms")
+		}
+		if fields.HTTPLatency {
+			labels = append(labels, "HTTP3"+compact(result.HTTP3.AverageMS)+"ms")
+		}
+		if fields.Bandwidth {
+			labels = append(labels, compact(result.Bandwidth.Mbps)+"Mbps")
+		}
+		return base + "#" + strings.Join(labels, "|")
+	}
 	if fields.Country && result.Candidate.Country != "" {
 		base += "#" + result.Candidate.Country
 	}
@@ -43,7 +60,7 @@ func CloudflareContents(results []model.ProbeResult, settings Settings) (content
 	for _, result := range results {
 		content := ""
 		if settings.Cloudflare.RecordType == "A" {
-			if result.Candidate.Port != 443 || result.Candidate.AddressType != model.AddressIPv4 || net.ParseIP(result.Candidate.IP).To4() == nil {
+			if result.Candidate.Port != 443 || result.Candidate.AddressType != model.AddressIPv4 || result.Candidate.Host != "" || net.ParseIP(result.Candidate.IP).To4() == nil {
 				skipped++
 				continue
 			}

@@ -61,8 +61,13 @@ func (s *Service) telegramRequest(ctx context.Context, settings Settings, method
 
 func telegramSummary(summary model.RunSummary, settings Settings, outcomes map[string]model.PublicationResult) string {
 	duration := summary.FinishedAt.Sub(summary.StartedAt)
+	mode := "TCP/HTTPS"
+	if model.NormalizeMode(summary.Mode) == model.ModeH3 {
+		mode = "H3"
+	}
 	lines := []string{
 		"CF Node Bench 测速完成",
+		"模式：" + mode,
 		fmt.Sprintf("耗时：%.1f 秒", duration.Seconds()),
 		fmt.Sprintf("通过节点：%d", len(summary.Results)),
 		"Cloudflare：" + targetSummary("cloudflare", settings.Cloudflare.Enabled, outcomes),

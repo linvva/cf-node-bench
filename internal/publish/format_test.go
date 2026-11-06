@@ -41,3 +41,31 @@ func TestCloudflareContentsAAndTXT(t *testing.T) {
 		t.Fatalf("TXT contents=%v eligible=%d skipped=%d", contents, eligible, skipped)
 	}
 }
+
+func TestH3FormatPreservesDomainAndUsesOnlyH3Metrics(t *testing.T) {
+	result := sampleResult("1.1.1.1", 8443, "HK")
+	result.Mode = model.ModeH3
+	result.Candidate.AddressType = model.AddressDomain
+	result.Candidate.Host = "nodes.example.com"
+	result.QUIC = model.ProbeStats{P95MS: 17.5}
+	result.HTTP3 = model.ProbeStats{AverageMS: 31.2}
+	fields := OutputFields{Country: true, TCPP95: true, HTTPLatency: true, Bandwidth: true}
+	if got := FormatResult(result, fields); got != "nodes.example.com:8443#HK|H3|QUIC17.5ms|HTTP331.2ms|186Mbps" {
+		t.Fatalf("H3 format = %q", got)
+	}
+	if got := FormatResult(result, OutputFields{}); got != "nodes.example.com:8443#H3" {
+		t.Fatalf("H3 base format = %q", got)
+	}
+	settings := DefaultSettings()
+	settings.Cloudflare.RecordType = "TXT"
+	contents, eligible, skipped := CloudflareContents([]model.ProbeResult{result}, settings)
+	if len(contents) != 1 || contents[0] != "nodes.example.com:8443#HK|H3|HTTP331.2ms|186Mbps" || eligible != 1 || skipped != 0 {
+		t.Fatalf("H3 TXT = %v eligible=%d skipped=%d", contents, eligible, skipped)
+	}
+	result.Candidate.Port = 443
+	settings.Cloudflare.RecordType = "A"
+	contents, eligible, skipped = CloudflareContents([]model.ProbeResult{result}, settings)
+	if len(contents) != 0 || eligible != 0 || skipped != 1 {
+		t.Fatalf("domain was expanded into A records: %v eligible=%d skipped=%d", contents, eligible, skipped)
+	}
+}

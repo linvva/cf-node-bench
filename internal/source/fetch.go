@@ -19,10 +19,11 @@ type HTTPSource struct {
 }
 
 type Fetcher struct {
-	Client     *http.Client
-	Timeout    time.Duration
-	MaxRetries int
-	RetryDelay time.Duration
+	AllowDomains bool
+	Client       *http.Client
+	Timeout      time.Duration
+	MaxRetries   int
+	RetryDelay   time.Duration
 }
 
 func (f Fetcher) Fetch(ctx context.Context, source HTTPSource) (ParseResult, error) {
@@ -88,6 +89,9 @@ func (f Fetcher) fetchOnce(ctx context.Context, source HTTPSource) (ParseResult,
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 	if err != nil {
 		return ParseResult{}, err
+	}
+	if f.AllowDomains {
+		return ParseH3(body, source.ID), nil
 	}
 	return Parse(body, source.ID), nil
 }

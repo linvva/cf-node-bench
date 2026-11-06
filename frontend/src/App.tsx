@@ -12,6 +12,7 @@ type Theme="system"|"light"|"dark";
 
 export function App(){
   const ready=useAppStore(state=>state.ready);
+  const migrationNotice=useAppStore(state=>state.migrationNotice);
   const running=useAppStore(state=>state.running);
   const [page,setPage]=useState<Page>("run");
   const [theme,setTheme]=useState<Theme>(()=>(localStorage.getItem("theme") as Theme)||"system");
@@ -28,6 +29,7 @@ export function App(){
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark"><Zap size={18}/></span><span><strong>CF Node Bench</strong><small>网络节点测量</small></span></div>
+
       <nav aria-label="主导航">
         <Button variant={page==="run"?"primary":"tertiary"} onPress={()=>setPage("run")}><Activity size={17}/>测速工作台{running&&<span className="live-dot"/>}</Button>
         <Button variant={page==="sources"?"primary":"tertiary"} onPress={()=>setPage("sources")}><Database size={17}/>数据源</Button>
@@ -36,9 +38,9 @@ export function App(){
       </nav>
       <div className="sidebar-foot">
         <span title={`切换主题：${theme}`}><Button isIconOnly variant="tertiary" aria-label={`当前主题：${theme}`} onPress={nextTheme}>{themeIcon}</Button></span>
-        <span>v0.6.0</span>
+        <span>v0.7.0</span>
       </div>
     </aside>
-    <main className="main-content">{page==="run"?<RunWorkspace/>:page==="sources"?<SourcesPage/>:page==="publish"?<PublishPage/>:<SettingsPage/>}</main>
+    <main className="main-content">{migrationNotice&&<p className="migration-notice" role="status">{migrationNotice}</p>}{page==="run"?<RunWorkspace/>:page==="sources"?<SourcesPage/>:page==="publish"?<PublishPage/>:<SettingsPage/>}</main>
   </div>;
 }

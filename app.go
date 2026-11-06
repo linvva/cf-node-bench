@@ -25,13 +25,15 @@ type NetworkInfo struct {
 }
 
 type Bootstrap struct {
-	Settings        config.Settings      `json:"settings"`
-	PublishSettings publish.SettingsView `json:"publishSettings"`
-	Sources         []source.HTTPSource  `json:"sources"`
-	History         []model.RunSummary   `json:"history"`
-	Network         NetworkInfo          `json:"network"`
-	Current         string               `json:"currentRunId,omitempty"`
-	Resume          runengine.ResumeInfo `json:"resume"`
+	Settings           config.Settings      `json:"settings"`
+	PublishSettings    publish.SettingsView `json:"publishSettings"`
+	Sources            []source.HTTPSource  `json:"sources"`
+	History            []model.RunSummary   `json:"history"`
+	Network            NetworkInfo          `json:"network"`
+	Current            string               `json:"currentRunId,omitempty"`
+	Resume             runengine.ResumeInfo `json:"resume"`
+	CurrentResultRunID string               `json:"currentResultRunId,omitempty"`
+	MigrationNotice    string               `json:"migrationNotice,omitempty"`
 }
 
 type App struct {
@@ -62,7 +64,7 @@ type trackingFetcher struct {
 }
 
 func newTrackingFetcher(store *storage.Store, settings config.Settings) trackingFetcher {
-	return trackingFetcher{store: store, fetcher: source.Fetcher{Timeout: settings.SourceTimeout(), MaxRetries: settings.SourceRetries}}
+	return trackingFetcher{store: store, fetcher: source.Fetcher{Timeout: settings.SourceTimeout(), MaxRetries: settings.SourceRetries, AllowDomains: settings.RequireH3}}
 }
 
 func (f trackingFetcher) Fetch(ctx context.Context, current source.HTTPSource) (source.ParseResult, error) {
@@ -81,10 +83,17 @@ func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 
 func (a *App) Bootstrap() Bootstrap {
 	network := detectNetwork()
-	return Bootstrap{Settings: a.store.Settings(), PublishSettings: a.store.PublishSettingsView(), Sources: a.store.Sources(), History: a.store.History(), Network: network, Current: a.manager.Current(), Resume: a.resumeInfo(network)}
+	return Bootstrap{Settings: a.store.Settings(), PublishSettings: a.store.PublishSettingsView(), Sources: a.store.Sources(), History: a.store.History(), Network: network, Current: a.manager.Current(), Resume: a.resumeInfo(network), MigrationNotice: a.store.MigrationNotice(), CurrentResultRunID: a.store.CurrentResultID()}
 }
 
-func (a *App) SaveSettings(settings config.Settings) error { return a.store.SaveSettings(settings) }
+func (a *App) SaveSettings(settings config.Settings) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.manager.Current() != "" && settings.RequireH3 != a.store.Settings().RequireH3 {
+		return fmt.Errorf("测速运行中不能切换测速模式")
+	}
+	return a.store.SaveSettings(settings)
+}
 
 func (a *App) SavePublishSettings(request publish.SaveRequest) (publish.SettingsView, error) {
 	return a.store.SavePublishSettings(request)
@@ -95,11 +104,37 @@ func (a *App) ClearPublishCredential(target string) (publish.SettingsView, error
 }
 
 func (a *App) TestPublishTarget(target string, request publish.SaveRequest) error {
-	settings := request.Merge(a.store.PublishSettings())
-	settings.Cloudflare.Enabled = target == "cloudflare"
-	settings.GitHub.Enabled = target == "github"
-	settings.Gist.Enabled = target == "gist"
-	settings.Telegram.Enabled = target == "telegram"
+	if request.TestMode != "" && request.TestMode != model.ModeTCPHTTPS && request.TestMode != model.ModeH3 {
+		return fmt.Errorf("未知发布测试协议")
+	}
+	form := request.Merge(a.store.PublishSettings()).ForMode(request.TestMode)
+	settings := publish.DefaultSettings()
+	settings.Request = form.Request
+	switch target {
+	case "cloudflare":
+		settings.Cloudflare = form.Cloudflare
+		settings.Cloudflare.Enabled = settings.Cloudflare.RecordName != ""
+	case "github":
+		settings.GitHub = form.GitHub
+		settings.GitHub.Enabled = settings.GitHub.Path != ""
+	case "gist":
+		settings.Gist = form.Gist
+		settings.Gist.Enabled = settings.Gist.GistID != "" && settings.Gist.Filename != ""
+	case "telegram":
+		settings.Telegram = form.Telegram
+		settings.Telegram.Enabled = true
+	default:
+		return fmt.Errorf("未知发布目标")
+	}
+	configured := map[string]bool{
+		"cloudflare": settings.Cloudflare.Enabled,
+		"github":     settings.GitHub.Enabled,
+		"gist":       settings.Gist.Enabled,
+		"telegram":   settings.Telegram.Enabled,
+	}[target]
+	if !configured {
+		return fmt.Errorf("当前模式未配置该发布目标")
+	}
 	if err := settings.Validate(); err != nil {
 		return err
 	}
@@ -149,12 +184,21 @@ func (a *App) SaveSources(sources []source.HTTPSource) error {
 
 func (a *App) StartRun(request runengine.StartRequest) (string, error) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.manager.Current() != "" {
+		return "", runengine.ErrAlreadyRunning
+	}
 	settings := a.store.Settings()
+	if err := settings.Validate(); err != nil {
+		return "", err
+	}
 	a.engine.Dependencies.Fetcher = newTrackingFetcher(a.store, settings)
 	a.engine.Dependencies.TCP = probe.TCPProber{Timeout: settings.ConnectTimeout()}
 	a.engine.Dependencies.HTTPS = probe.HTTPSProber{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout()}
 	a.engine.Dependencies.Bandwidth = probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.BandwidthTestURL}
-	a.mu.Unlock()
+	a.engine.Dependencies.QUIC = probe.QUICProber{Timeout: settings.ConnectTimeout(), WorkerHost: settings.EffectiveVerificationHost()}
+	a.engine.Dependencies.HTTP3 = probe.HTTP3Prober{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout(), WorkerHost: settings.EffectiveVerificationHost()}
+	a.engine.Dependencies.H3Bandwidth = probe.H3BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.EffectiveBandwidthTestURL()}
 	stage := request.StartStage
 	if stage == "" {
 		stage = runengine.StageSource
@@ -162,13 +206,22 @@ func (a *App) StartRun(request runengine.StartRequest) (string, error) {
 	if !runengine.ValidStartStage(stage) {
 		return "", fmt.Errorf("未知测速起点")
 	}
+	if settings.RequireH3 && (stage == runengine.StageTCP || stage == runengine.StageHTTPS) || !settings.RequireH3 && (stage == runengine.StageQUIC || stage == runengine.StageHTTP3) {
+		return "", fmt.Errorf("测速阶段与模式不匹配")
+	}
 	network := detectNetwork()
 	networkSnapshot := runengine.NetworkSnapshot{Interface: network.Interface, IPv4: network.IPv4}
 	var base *runengine.Checkpoint
 	retained := []model.ProbeResult{}
 	if stage == runengine.StageSource && settings.RetainPreviousResults {
-		retained = a.store.LatestCompletedResults()
+		for _, summary := range a.store.History() {
+			if summary.State == "completed" && model.NormalizeMode(summary.Mode) == settings.ProbeMode() && (!settings.RequireH3 || summary.WorkerHost == settings.EffectiveVerificationHost()) {
+				retained = summary.Results
+				break
+			}
+		}
 	}
+
 	if stage != runengine.StageSource {
 		checkpoint, ok, err := a.store.Checkpoint()
 		if err != nil {
@@ -195,11 +248,15 @@ func (a *App) StartRun(request runengine.StartRequest) (string, error) {
 		base = &checkpoint
 	}
 	input := runengine.RunInput{Sources: a.store.Sources(), Retained: retained, Plan: runengine.RunPlan{StartStage: stage, Base: base, Network: networkSnapshot, Save: a.store.SaveCheckpoint}}
-	return a.manager.Start(a.ctx, a.engine, settings, input, func(progress model.RunProgress) {
-		runtime.EventsEmit(a.ctx, "run:progress", progress)
+	return a.manager.Start(a.appContext(), a.engine, settings, input, func(progress model.RunProgress) {
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "run:progress", progress)
+		}
 	}, func(summary model.RunSummary) {
 		_ = a.store.AddHistory(summary)
-		runtime.EventsEmit(a.ctx, "run:complete", summary)
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "run:complete", summary)
+		}
 		if summary.State == "completed" {
 			_ = a.queue.Enqueue(a.appContext(), summary, a.store.PublishSettings(), "all")
 		}
@@ -207,11 +264,7 @@ func (a *App) StartRun(request runengine.StartRequest) (string, error) {
 }
 
 func (a *App) latestRunID() string {
-	history := a.store.History()
-	if len(history) == 0 {
-		return ""
-	}
-	return history[0].RunID
+	return a.store.CurrentResultID()
 }
 
 func (a *App) resumeInfo(network NetworkInfo) runengine.ResumeInfo {

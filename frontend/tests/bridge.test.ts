@@ -7,14 +7,14 @@ describe("Wails bridge normalization",()=>{
   it("normalizes legacy null settings and history collections",()=>{
     const raw={settings:{probeCount:5,allowedPorts:null,allowedCountries:null,blockedCountries:null},sources:null,history:[{runId:"old",results:null,failures:null}],network:null} as unknown as Bootstrap;
     const value=normalizeBootstrap(raw);
-    expect(value.settings.tcpProbeCount).toBe(5);
-    expect(value.settings.httpsProbeCount).toBe(5);
+    expect(value.settings.connectionProbeCount).toBe(5);
+    expect(value.settings.httpProbeCount).toBe(5);
     expect(value.settings.allowedPorts).toEqual([]);
     expect(value.settings.allowedCountries).toEqual([]);
     expect(value.settings.blockedCountries).toEqual([]);
     expect(value.settings.bandwidthTestUrl).toBe(DEFAULT_BANDWIDTH_TEST_URL);
     expect(value.settings.retainPreviousResults).toBe(true);
-    expect(value.settings.scoreWeights).toEqual({bandwidth:40,https:25,tcp:15,reliability:15,jitter:5});
+    expect(value.settings.scoreWeights).toEqual({bandwidth:40,http:25,connection:15,reliability:15,jitter:5});
     expect(value.sources).toEqual([]);
     expect(value.history[0].results).toEqual([]);
     expect(value.history[0].failures).toEqual({});
@@ -22,7 +22,7 @@ describe("Wails bridge normalization",()=>{
     expect(value.history[0].scoreWeights).toEqual({tcp:20,https:20,jitter:10,reliability:30,bandwidth:20});
     expect(value.resume.options).toEqual([]);
     expect(value.publishSettings.cloudflare.recordType).toBe("A");
-    expect(value.publishSettings.gist).toEqual({enabled:false,tokenConfigured:false,gistId:"",filename:"ip.txt"});
+    expect(value.publishSettings.gist).toEqual({enabled:false,tokenConfigured:false,gistId:"",filename:"",h3:{gistId:"",filename:""}});
     expect(value.publishSettings.telegram.contentMode).toBe("summary");
     expect(value.publishSettings.telegram.deliveryMode).toBe("direct");
     expect(value.publishSettings.telegram.relayUrl).toBe("");

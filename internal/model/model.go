@@ -5,16 +5,39 @@ import "time"
 type AddressType string
 
 const AddressIPv4 AddressType = "ipv4"
+const AddressDomain AddressType = "domain"
+
+type Mode string
+
+const (
+	ModeTCPHTTPS Mode = "tcp_https"
+	ModeH3       Mode = "h3"
+)
+
+func NormalizeMode(mode Mode) Mode {
+	if mode == "" {
+		return ModeTCPHTTPS
+	}
+	return mode
+}
 
 type Candidate struct {
 	AddressType AddressType `json:"addressType"`
 	IP          string      `json:"ip"`
+	Host        string      `json:"host,omitempty"`
 	Port        int         `json:"port"`
 	Country     string      `json:"country,omitempty"`
 	SourceID    string      `json:"sourceId,omitempty"`
 }
 
-func (c Candidate) Key() string { return c.IP + ":" + itoa(c.Port) }
+func (c Candidate) Address() string {
+	if c.AddressType == AddressDomain {
+		return c.Host
+	}
+	return c.IP
+}
+
+func (c Candidate) Key() string { return c.Address() + ":" + itoa(c.Port) }
 
 func itoa(value int) string {
 	if value == 0 {
@@ -33,18 +56,21 @@ func itoa(value int) string {
 type FailureReason string
 
 const (
-	FailureInvalidIP       FailureReason = "invalid_ip"
-	FailureInvalidPort     FailureReason = "invalid_port"
-	FailureInvalidTag      FailureReason = "invalid_tag"
-	FailurePortFiltered    FailureReason = "port_filtered"
-	FailureCountryFiltered FailureReason = "country_filtered"
-	FailureDNS             FailureReason = "dns"
-	FailureTCP             FailureReason = "tcp"
-	FailureTLS             FailureReason = "tls"
-	FailureTimeout         FailureReason = "timeout"
-	FailureHTTPStatus      FailureReason = "http_status"
-	FailureCancelled       FailureReason = "cancelled"
-	FailureDownload        FailureReason = "download"
+	FailureInvalidIP            FailureReason = "invalid_ip"
+	FailureInvalidPort          FailureReason = "invalid_port"
+	FailureInvalidTag           FailureReason = "invalid_tag"
+	FailurePortFiltered         FailureReason = "port_filtered"
+	FailureCountryFiltered      FailureReason = "country_filtered"
+	FailureDNS                  FailureReason = "dns"
+	FailureTCP                  FailureReason = "tcp"
+	FailureTLS                  FailureReason = "tls"
+	FailureTimeout              FailureReason = "timeout"
+	FailureHTTPStatus           FailureReason = "http_status"
+	FailureCancelled            FailureReason = "cancelled"
+	FailureDownload             FailureReason = "download"
+	FailureQUIC                 FailureReason = "quic"
+	FailureQUICHandshakeTimeout FailureReason = "quic_timeout"
+	FailureProtocol             FailureReason = "protocol"
 )
 
 type ProbeStats struct {
@@ -68,6 +94,8 @@ type BandwidthStats struct {
 }
 
 type ScoreParts struct {
+	QUIC        float64 `json:"quic,omitempty"`
+	HTTP3       float64 `json:"http3,omitempty"`
 	TCP         float64 `json:"tcp"`
 	HTTPS       float64 `json:"https"`
 	Jitter      float64 `json:"jitter"`
@@ -76,6 +104,10 @@ type ScoreParts struct {
 }
 
 type ScoreWeights struct {
+	Connection  int `json:"connection,omitempty"`
+	HTTP        int `json:"http,omitempty"`
+	QUIC        int `json:"quic,omitempty"`
+	HTTP3       int `json:"http3,omitempty"`
 	TCP         int `json:"tcp"`
 	HTTPS       int `json:"https"`
 	Jitter      int `json:"jitter"`
@@ -84,13 +116,25 @@ type ScoreWeights struct {
 }
 
 type ProbeResult struct {
-	Candidate Candidate      `json:"candidate"`
-	TCP       ProbeStats     `json:"tcp"`
-	HTTPS     ProbeStats     `json:"https"`
+	Mode       Mode             `json:"mode,omitempty"`
+	QUIC       ProbeStats       `json:"quic"`
+	HTTP3      ProbeStats       `json:"http3"`
+	ResolvedAt time.Time        `json:"resolvedAt,omitempty"`
+	Endpoints  []EndpointResult `json:"endpoints,omitempty"`
+	Candidate  Candidate        `json:"candidate"`
+	TCP        ProbeStats       `json:"tcp"`
+	HTTPS      ProbeStats       `json:"https"`
+	Bandwidth  BandwidthStats   `json:"bandwidth"`
+	Score      float64          `json:"score"`
+	Parts      ScoreParts       `json:"parts"`
+	Status     string           `json:"status"`
+}
+
+type EndpointResult struct {
+	IP        string         `json:"ip"`
+	QUIC      ProbeStats     `json:"quic"`
+	HTTP3     ProbeStats     `json:"http3"`
 	Bandwidth BandwidthStats `json:"bandwidth"`
-	Score     float64        `json:"score"`
-	Parts     ScoreParts     `json:"parts"`
-	Status    string         `json:"status"`
 }
 
 type StageProgress struct {
@@ -106,28 +150,37 @@ type StageProgress struct {
 }
 
 type RunProgress struct {
-	RunID             string                `json:"runId"`
-	State             string                `json:"state"`
-	StartedAt         time.Time             `json:"startedAt"`
-	Stages            []StageProgress       `json:"stages"`
-	Failures          map[FailureReason]int `json:"failures"`
-	Message           string                `json:"message,omitempty"`
-	CheckpointWarning string                `json:"checkpointWarning,omitempty"`
+	Mode               Mode                  `json:"mode,omitempty"`
+	LogicalCandidates  int                   `json:"logicalCandidates,omitempty"`
+	PhysicalCandidates int                   `json:"physicalCandidates,omitempty"`
+	DownloadedBytes    int64                 `json:"downloadedBytes,omitempty"`
+	RunID              string                `json:"runId"`
+	State              string                `json:"state"`
+	StartedAt          time.Time             `json:"startedAt"`
+	Stages             []StageProgress       `json:"stages"`
+	Failures           map[FailureReason]int `json:"failures"`
+	Message            string                `json:"message,omitempty"`
+	CheckpointWarning  string                `json:"checkpointWarning,omitempty"`
 }
 
 type RunSummary struct {
-	RunID             string                `json:"runId"`
-	StartedAt         time.Time             `json:"startedAt"`
-	FinishedAt        time.Time             `json:"finishedAt"`
-	State             string                `json:"state"`
-	Results           []ProbeResult         `json:"results"`
-	Failures          map[FailureReason]int `json:"failures"`
-	Publications      []PublicationResult   `json:"publications"`
-	ScoreWeights      ScoreWeights          `json:"scoreWeights"`
-	ParentRunID       string                `json:"parentRunId,omitempty"`
-	StartStage        string                `json:"startStage,omitempty"`
-	ReusedStages      []string              `json:"reusedStages,omitempty"`
-	CheckpointWarning string                `json:"checkpointWarning,omitempty"`
+	Mode               Mode                  `json:"mode,omitempty"`
+	WorkerHost         string                `json:"workerHost,omitempty"`
+	LogicalCandidates  int                   `json:"logicalCandidates,omitempty"`
+	PhysicalCandidates int                   `json:"physicalCandidates,omitempty"`
+	DownloadedBytes    int64                 `json:"downloadedBytes,omitempty"`
+	RunID              string                `json:"runId"`
+	StartedAt          time.Time             `json:"startedAt"`
+	FinishedAt         time.Time             `json:"finishedAt"`
+	State              string                `json:"state"`
+	Results            []ProbeResult         `json:"results"`
+	Failures           map[FailureReason]int `json:"failures"`
+	Publications       []PublicationResult   `json:"publications"`
+	ScoreWeights       ScoreWeights          `json:"scoreWeights"`
+	ParentRunID        string                `json:"parentRunId,omitempty"`
+	StartStage         string                `json:"startStage,omitempty"`
+	ReusedStages       []string              `json:"reusedStages,omitempty"`
+	CheckpointWarning  string                `json:"checkpointWarning,omitempty"`
 }
 
 type PublicationResult struct {
@@ -141,4 +194,17 @@ type PublicationResult struct {
 	Message    string    `json:"message,omitempty"`
 	StartedAt  time.Time `json:"startedAt"`
 	FinishedAt time.Time `json:"finishedAt,omitempty"`
+}
+
+// ForMode projects shared weights onto the measured protocol; legacy history stays readable.
+func (w ScoreWeights) ForMode(mode Mode) ScoreWeights {
+	if w.Connection != 0 || w.HTTP != 0 {
+		w.TCP, w.HTTPS, w.QUIC, w.HTTP3 = 0, 0, 0, 0
+		if mode == ModeH3 {
+			w.QUIC, w.HTTP3 = w.Connection, w.HTTP
+		} else {
+			w.TCP, w.HTTPS = w.Connection, w.HTTP
+		}
+	}
+	return w
 }

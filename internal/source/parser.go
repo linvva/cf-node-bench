@@ -8,7 +8,9 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/linvva/cf-node-bench/internal/config"
 	"github.com/linvva/cf-node-bench/internal/model"
+	"golang.org/x/net/idna"
 )
 
 type ParseFailure struct {
@@ -22,49 +24,66 @@ type ParseResult struct {
 }
 
 func Parse(data []byte, sourceID string) ParseResult {
+	return parse(data, sourceID, false)
+}
+
+func ParseH3(data []byte, sourceID string) ParseResult {
+	return parse(data, sourceID, true)
+}
+
+func parse(data []byte, sourceID string, allowDomains bool) ParseResult {
 	var decoded any
 	if json.Unmarshal(data, &decoded) == nil {
 		result := ParseResult{}
-		walkJSON(decoded, sourceID, &result)
+		walkJSON(decoded, sourceID, &result, allowDomains)
 		return deduplicate(result)
 	}
 	result := ParseResult{}
 	for _, token := range strings.FieldsFunc(string(data), func(r rune) bool {
 		return unicode.IsSpace(r) || r == ',' || r == ';'
 	}) {
-		parseToken(token, sourceID, &result)
+		parseToken(token, sourceID, &result, allowDomains)
 	}
 	return deduplicate(result)
 }
 
-func walkJSON(value any, sourceID string, result *ParseResult) {
+func walkJSON(value any, sourceID string, result *ParseResult, allowDomains bool) {
 	switch typed := value.(type) {
 	case []any:
 		for _, item := range typed {
-			walkJSON(item, sourceID, result)
+			walkJSON(item, sourceID, result, allowDomains)
 		}
 	case map[string]any:
 		ip, hasIP := stringValue(typed, "ip", "host")
 		port, hasPort := intValue(typed, "port")
 		if hasIP || hasPort {
+			if allowDomains && !hasPort {
+				if _, specified := typed["port"]; !specified {
+					port = 443
+				}
+			}
 			country, _ := stringValue(typed, "country", "cc")
-			addCandidate(ip, port, country, sourceID, result)
+			addCandidate(ip, port, country, sourceID, result, allowDomains)
 			return
 		}
 		for _, child := range typed {
-			walkJSON(child, sourceID, result)
+			walkJSON(child, sourceID, result, allowDomains)
 		}
 	case string:
 		for _, token := range strings.Fields(typed) {
-			parseToken(token, sourceID, result)
+			parseToken(token, sourceID, result, allowDomains)
 		}
 	}
 }
 
-func parseToken(token, sourceID string, result *ParseResult) {
+func parseToken(token, sourceID string, result *ParseResult, allowDomains bool) {
 	address, country, _ := strings.Cut(strings.TrimSpace(token), "#")
 	if ip := net.ParseIP(address); ip != nil && ip.To4() != nil {
-		addCandidate(address, 443, country, sourceID, result)
+		addCandidate(address, 443, country, sourceID, result, allowDomains)
+		return
+	}
+	if allowDomains && !strings.Contains(address, ":") {
+		addCandidate(address, 443, country, sourceID, result, true)
 		return
 	}
 	host, portText, err := net.SplitHostPort(address)
@@ -76,13 +95,14 @@ func parseToken(token, sourceID string, result *ParseResult) {
 	if err != nil {
 		port = 0
 	}
-	addCandidate(host, port, country, sourceID, result)
+	addCandidate(host, port, country, sourceID, result, allowDomains)
 }
 
-func addCandidate(ipText string, port int, country, sourceID string, result *ParseResult) {
+func addCandidate(ipText string, port int, country, sourceID string, result *ParseResult, allowDomains bool) {
 	ip := net.ParseIP(strings.TrimSpace(ipText))
 	value := fmt.Sprintf("%s:%d", ipText, port)
-	if ip == nil || ip.To4() == nil {
+	host, validHost := normalizeDomain(ipText)
+	if (ip == nil || ip.To4() == nil) && !(allowDomains && ip == nil && validHost) {
 		result.Failures = append(result.Failures, ParseFailure{value, model.FailureInvalidIP})
 		return
 	}
@@ -95,7 +115,26 @@ func addCandidate(ipText string, port int, country, sourceID string, result *Par
 		result.Failures = append(result.Failures, ParseFailure{value, model.FailureInvalidTag})
 		return
 	}
-	result.Candidates = append(result.Candidates, model.Candidate{AddressType: model.AddressIPv4, IP: ip.String(), Port: port, Country: country, SourceID: sourceID})
+	candidate := model.Candidate{AddressType: model.AddressIPv4, Port: port, Country: country, SourceID: sourceID}
+	if ip != nil {
+		candidate.IP = ip.String()
+	} else {
+		candidate.AddressType = model.AddressDomain
+		candidate.Host = host
+	}
+	result.Candidates = append(result.Candidates, candidate)
+}
+
+func normalizeDomain(raw string) (string, bool) {
+	host, err := idna.Lookup.ToASCII(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(raw)), "."))
+	if err != nil || !config.ValidDomain(host) {
+		return "", false
+	}
+	// An invalid numeric IPv4 must not silently become a domain candidate.
+	if strings.Trim(host, "0123456789.") == "" {
+		return "", false
+	}
+	return host, true
 }
 
 func stringValue(object map[string]any, keys ...string) (string, bool) {

@@ -11,7 +11,7 @@ import (
 
 var (
 	ErrAlreadyPublishing = errors.New("该测速结果正在发布")
-	ErrNoTargets         = errors.New("没有已启用的发布目标")
+	ErrNoTargets         = errors.New("当前测速模式没有已配置且启用的发布目标")
 )
 
 type Update struct {
@@ -41,6 +41,10 @@ func NewCoordinator(service *Service, update func(Update)) *Coordinator {
 }
 
 func (c *Coordinator) Enqueue(ctx context.Context, summary model.RunSummary, settings Settings, target string) error {
+	if err := settings.validateH3Targets(); err != nil {
+		return err
+	}
+	settings = settings.ForMode(summary.Mode)
 	if target == "all" && !settings.Cloudflare.Enabled && !settings.GitHub.Enabled && !settings.Gist.Enabled && !settings.Telegram.Enabled {
 		return ErrNoTargets
 	}

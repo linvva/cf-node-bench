@@ -27,10 +27,14 @@ type BandwidthProbe interface {
 }
 
 type Dependencies struct {
-	Fetcher   SourceFetcher
-	TCP       TCPProbe
-	HTTPS     HTTPSProbe
-	Bandwidth BandwidthProbe
+	Resolver    DNSResolver
+	QUIC        TCPProbe
+	HTTP3       HTTPSProbe
+	H3Bandwidth BandwidthProbe
+	Fetcher     SourceFetcher
+	TCP         TCPProbe
+	HTTPS       HTTPSProbe
+	Bandwidth   BandwidthProbe
 }
 
 type Engine struct{ Dependencies Dependencies }
@@ -49,12 +53,16 @@ type RunInput struct {
 }
 
 func (e Engine) Run(ctx context.Context, runID string, settings config.Settings, input RunInput, emit func(model.RunProgress)) model.RunSummary {
+	settings.AllowedPorts = slices.Clone(settings.AllowedPorts)
+	settings.AllowedCountries = slices.Clone(settings.AllowedCountries)
+	settings.BlockedCountries = slices.Clone(settings.BlockedCountries)
+	input.Plan.StartStage = runStartStage(input.Plan.StartStage, settings, input.Plan.Base)
+	if settings.RequireH3 {
+		return e.runH3(ctx, runID, settings, input, emit)
+	}
 	started := time.Now()
 	progress := newProgress(runID, started, emit)
 	startStage := input.Plan.StartStage
-	if !ValidStartStage(startStage) || startStage != StageSource && input.Plan.Base == nil {
-		startStage = StageSource
-	}
 	base := input.Plan.Base
 	parentRunID := ""
 	if base != nil {
@@ -89,6 +97,7 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 	}
 	finish := func(results []model.ProbeResult, state string) model.RunSummary {
 		summary := progress.summary(started, results, state)
+		summary.Mode = model.ModeTCPHTTPS
 		summary.ScoreWeights = settings.ScoreWeights
 		summary.ParentRunID = parentRunID
 		summary.StartStage = startStage
@@ -237,23 +246,25 @@ func (p stagePipeline) filter(candidates []model.Candidate, initial map[model.Fa
 }
 
 func (p stagePipeline) tcp(candidates []model.Candidate) []model.ProbeResult {
-	p.progress.startProbe("tcp", len(candidates), p.settings.TCPProbeCount)
+	p.progress.startProbe("tcp", len(candidates), p.settings.ConnectionProbeCount)
 	started := time.Now()
-	results := parallel(p.ctx, candidates, p.settings.TCPConcurrency, func(ctx context.Context, candidate model.Candidate) model.ProbeResult {
-		return model.ProbeResult{Candidate: candidate, TCP: p.dependencies.TCP.Probe(ctx, candidate, p.settings.TCPProbeCount, func() { p.progress.attempt("tcp") })}
+	results := parallel(p.ctx, candidates, p.settings.ConnectionConcurrency, func(ctx context.Context, candidate model.Candidate) model.ProbeResult {
+		return model.ProbeResult{Candidate: candidate, TCP: p.dependencies.TCP.Probe(ctx, candidate, p.settings.ConnectionProbeCount, func() { p.progress.attempt("tcp") })}
 	}, func(result model.ProbeResult) {
-		passed := result.TCP.SuccessRate >= p.settings.TCPMinSuccessRate
+		passed := result.TCP.SuccessRate >= p.settings.ConnectionMinSuccessRate
 		p.progress.advance("tcp", passed, nodeFailure(passed, result.TCP.Failures, model.FailureTCP))
 	})
-	passed := countIf(results, func(result model.ProbeResult) bool { return result.TCP.SuccessRate >= p.settings.TCPMinSuccessRate })
+	passed := countIf(results, func(result model.ProbeResult) bool {
+		return result.TCP.SuccessRate >= p.settings.ConnectionMinSuccessRate
+	})
 	p.progress.finishAt("tcp", len(candidates), passed, len(candidates)-passed, started)
 	return results
 }
 
 func (p stagePipeline) https(candidates []model.ProbeResult) []model.ProbeResult {
-	initialCount := min(p.settings.TCPCandidateCount, len(candidates))
-	target := min(p.settings.TCPCandidateCount, len(candidates))
-	p.progress.startProbe("https", initialCount, p.settings.HTTPSProbeCount)
+	initialCount := min(p.settings.HTTPCandidateCount, len(candidates))
+	target := min(p.settings.HTTPCandidateCount, len(candidates))
+	p.progress.startProbe("https", initialCount, p.settings.HTTPProbeCount)
 	started := time.Now()
 	results := make([]model.ProbeResult, 0, initialCount)
 	passed, next := 0, 0
@@ -261,19 +272,19 @@ func (p stagePipeline) https(candidates []model.ProbeResult) []model.ProbeResult
 		batchSize := initialCount
 		if next > 0 {
 			batchSize = min(target-passed, len(candidates)-next)
-			p.progress.extendProbe("https", batchSize, p.settings.HTTPSProbeCount)
+			p.progress.extendProbe("https", batchSize, p.settings.HTTPProbeCount)
 		}
 		batch := candidates[next : next+batchSize]
 		next += batchSize
-		batchResults := parallel(p.ctx, batch, p.settings.HTTPSConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
-			result.HTTPS = p.dependencies.HTTPS.Probe(ctx, result.Candidate, p.settings.HTTPSProbeCount, func() { p.progress.attempt("https") })
+		batchResults := parallel(p.ctx, batch, p.settings.HTTPConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
+			result.HTTPS = p.dependencies.HTTPS.Probe(ctx, result.Candidate, p.settings.HTTPProbeCount, func() { p.progress.attempt("https") })
 			return result
 		}, func(result model.ProbeResult) {
-			qualified := result.HTTPS.SuccessRate >= p.settings.HTTPSMinSuccessRate
+			qualified := result.HTTPS.SuccessRate >= p.settings.HTTPMinSuccessRate
 			p.progress.advance("https", qualified, nodeFailure(qualified, result.HTTPS.Failures, model.FailureTLS))
 		})
 		results = append(results, batchResults...)
-		passed += countIf(batchResults, func(result model.ProbeResult) bool { return result.HTTPS.SuccessRate >= p.settings.HTTPSMinSuccessRate })
+		passed += countIf(batchResults, func(result model.ProbeResult) bool { return result.HTTPS.SuccessRate >= p.settings.HTTPMinSuccessRate })
 	}
 	p.progress.finishAt("https", next, passed, next-passed, started)
 	return results
@@ -282,14 +293,14 @@ func (p stagePipeline) https(candidates []model.ProbeResult) []model.ProbeResult
 func (p stagePipeline) retained(candidates []model.ProbeResult) []model.ProbeResult {
 	p.progress.startProbe("retained", len(candidates), 1)
 	started := time.Now()
-	results := parallel(p.ctx, candidates, p.settings.HTTPSConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
+	results := parallel(p.ctx, candidates, p.settings.HTTPConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
 		result.HTTPS = p.dependencies.HTTPS.Probe(ctx, result.Candidate, 1, func() { p.progress.attempt("retained") })
 		return result
 	}, func(result model.ProbeResult) {
-		passed := result.HTTPS.SuccessRate >= p.settings.HTTPSMinSuccessRate
+		passed := result.HTTPS.SuccessRate >= p.settings.HTTPMinSuccessRate
 		p.progress.advance("retained", passed, nodeFailure(passed, result.HTTPS.Failures, model.FailureTLS))
 	})
-	passed := countIf(results, func(result model.ProbeResult) bool { return result.HTTPS.SuccessRate >= p.settings.HTTPSMinSuccessRate })
+	passed := countIf(results, func(result model.ProbeResult) bool { return result.HTTPS.SuccessRate >= p.settings.HTTPMinSuccessRate })
 	p.progress.finishAt("retained", len(candidates), passed, len(candidates)-passed, started)
 	return results
 }
@@ -333,7 +344,7 @@ func (p stagePipeline) ranking(results []model.ProbeResult) []model.ProbeResult 
 	input := len(results)
 	p.progress.start("ranking", input)
 	started := time.Now()
-	results = ranking.Score(results, p.settings.TCPMinSuccessRate, p.settings.HTTPSMinSuccessRate, p.settings.ScoreWeights)
+	results = ranking.Score(results, p.settings.ConnectionMinSuccessRate, p.settings.HTTPMinSuccessRate, p.settings.ScoreWeights)
 	if len(results) > p.settings.FinalResultCount {
 		results = results[:p.settings.FinalResultCount]
 	}
@@ -351,14 +362,12 @@ func checkpointForRun(runID, parentRunID string, settings config.Settings, sourc
 	}
 	checkpoint.Sources = append([]source.HTTPSource(nil), base.Sources...)
 	checkpoint.Candidates = append([]model.Candidate(nil), base.Candidates...)
-	for name, completedAt := range base.CompletedAt {
-		checkpoint.CompletedAt[name] = completedAt
-	}
-	for name, stageSettings := range base.StageSettings {
-		checkpoint.StageSettings[name] = stageSettings
-	}
-	for name, stageNetwork := range base.StageNetworks {
-		checkpoint.StageNetworks[name] = stageNetwork
+	for _, name := range reusedStages(startStage) {
+		if _, completed := base.Stage(name); completed {
+			checkpoint.CompletedAt[name] = base.CompletedAt[name]
+			checkpoint.StageSettings[name] = stageSettings(*base, name)
+			checkpoint.StageNetworks[name] = base.StageNetworks[name]
+		}
 	}
 	if startStage == StageHTTPS || startStage == StageBandwidth || startStage == StageRanking {
 		checkpoint.TCPResults = append([]model.ProbeResult(nil), base.TCPResults...)
@@ -405,6 +414,10 @@ func reusedStages(startStage string) []string {
 
 func filterCandidates(candidates []model.Candidate, settings config.Settings, failures map[model.FailureReason]int) []model.Candidate {
 	return filter(candidates, func(candidate model.Candidate) bool {
+		if !settings.RequireH3 && candidate.AddressType == model.AddressDomain {
+			failures[model.FailureInvalidIP]++
+			return false
+		}
 		if !settings.AllowsPort(candidate.Port) {
 			failures[model.FailurePortFiltered]++
 			return false
@@ -419,7 +432,7 @@ func filterCandidates(candidates []model.Candidate, settings config.Settings, fa
 
 func filterTCPResults(results []model.ProbeResult, settings config.Settings) []model.ProbeResult {
 	results = filter(results, func(result model.ProbeResult) bool {
-		return settings.AllowsPort(result.Candidate.Port) && settings.AllowsCountry(result.Candidate.Country) && result.TCP.SuccessRate >= settings.TCPMinSuccessRate
+		return settings.AllowsPort(result.Candidate.Port) && settings.AllowsCountry(result.Candidate.Country) && result.TCP.SuccessRate >= settings.ConnectionMinSuccessRate
 	})
 	for index := range results {
 		results[index].HTTPS = model.ProbeStats{}
@@ -434,7 +447,7 @@ func filterTCPResults(results []model.ProbeResult, settings config.Settings) []m
 
 func filterHTTPSResults(results []model.ProbeResult, settings config.Settings) []model.ProbeResult {
 	results = filter(results, func(result model.ProbeResult) bool {
-		return settings.AllowsPort(result.Candidate.Port) && settings.AllowsCountry(result.Candidate.Country) && result.TCP.SuccessRate >= settings.TCPMinSuccessRate && result.HTTPS.SuccessRate >= settings.HTTPSMinSuccessRate
+		return settings.AllowsPort(result.Candidate.Port) && settings.AllowsCountry(result.Candidate.Country) && result.TCP.SuccessRate >= settings.ConnectionMinSuccessRate && result.HTTPS.SuccessRate >= settings.HTTPMinSuccessRate
 	})
 	for index := range results {
 		results[index].Bandwidth = model.BandwidthStats{}
@@ -555,6 +568,9 @@ func prepareRetained(items []model.ProbeResult, fresh []model.Candidate, setting
 	prepared := make([]model.ProbeResult, 0, len(items))
 	failures := map[model.FailureReason]int{}
 	for _, result := range items {
+		if result.Candidate.AddressType == model.AddressDomain || model.NormalizeMode(result.Mode) != model.ModeTCPHTTPS {
+			continue
+		}
 		key := result.Candidate.Key()
 		if seen[key] {
 			continue
@@ -572,7 +588,7 @@ func prepareRetained(items []model.ProbeResult, fresh []model.Candidate, setting
 			failures[model.FailureCountryFiltered]++
 			continue
 		}
-		if result.TCP.SuccessRate < settings.TCPMinSuccessRate {
+		if result.TCP.SuccessRate < settings.ConnectionMinSuccessRate {
 			failures[model.FailureTCP]++
 			continue
 		}
@@ -631,7 +647,7 @@ type progressTracker struct {
 
 func newProgress(id string, started time.Time, emit func(model.RunProgress)) *progressTracker {
 	progress := &progressTracker{
-		value:        model.RunProgress{RunID: id, State: "running", StartedAt: started, Failures: map[model.FailureReason]int{}},
+		value:        model.RunProgress{Mode: model.ModeTCPHTTPS, RunID: id, State: "running", StartedAt: started, Failures: map[model.FailureReason]int{}},
 		emit:         emit,
 		stageStarts:  map[string]time.Time{},
 		stageUpdates: map[string]int{},

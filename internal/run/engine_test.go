@@ -49,7 +49,7 @@ func (f fakeTCP) Probe(ctx context.Context, c model.Candidate, n int, onAttempt 
 func TestEngineFiltersBlockedCountryBeforeTCP(t *testing.T) {
 	settings := config.DefaultSettings()
 	settings.BlockedCountries = []string{"CN"}
-	settings.TCPConcurrency = 1
+	settings.ConnectionConcurrency = 1
 	candidates := []model.Candidate{
 		{AddressType: model.AddressIPv4, IP: "1.1.1.1", Port: 443, Country: "CN"},
 		{AddressType: model.AddressIPv4, IP: "8.8.8.8", Port: 443, Country: "US"},
@@ -186,8 +186,8 @@ func (f *blockingHTTPS) Probe(ctx context.Context, _ model.Candidate, attempts i
 
 func TestCancelledStageDoesNotPersistPartialSamples(t *testing.T) {
 	settings := config.DefaultSettings()
-	settings.TCPConcurrency = 1
-	settings.HTTPSConcurrency = 1
+	settings.ConnectionConcurrency = 1
+	settings.HTTPConcurrency = 1
 	probe := &blockingHTTPS{started: make(chan struct{})}
 	engine := Engine{Dependencies: Dependencies{Fetcher: fakeFetcher{}, TCP: fakeTCP{}, HTTPS: probe, Bandwidth: fakeBandwidth{}}}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -235,10 +235,10 @@ func (f selectiveBandwidth) Probe(_ context.Context, candidate model.Candidate) 
 
 func TestRetainedResultsTakePriorityAndUseExtraBandwidthQuota(t *testing.T) {
 	settings := config.DefaultSettings()
-	settings.TCPConcurrency = 1
-	settings.HTTPSConcurrency = 1
+	settings.ConnectionConcurrency = 1
+	settings.HTTPConcurrency = 1
 	settings.BandwidthConcurrency = 1
-	settings.TCPCandidateCount = 3
+	settings.HTTPCandidateCount = 3
 	settings.BandwidthCandidates = 3
 	settings.FinalResultCount = 3
 	fresh := []model.Candidate{
@@ -281,7 +281,7 @@ func TestRetainedResultsTakePriorityAndUseExtraBandwidthQuota(t *testing.T) {
 			if call.attempts == 1 && call.candidate.Country == "US" && call.candidate.SourceID == "fresh" {
 				duplicateFastCalls++
 			}
-			if call.attempts == settings.HTTPSProbeCount {
+			if call.attempts == settings.HTTPProbeCount {
 				duplicateFullCalls++
 			}
 		}
@@ -314,7 +314,7 @@ func TestRetainedResultsTakePriorityAndUseExtraBandwidthQuota(t *testing.T) {
 
 func TestRetainedFailuresAreEliminated(t *testing.T) {
 	settings := config.DefaultSettings()
-	settings.HTTPSConcurrency = 1
+	settings.HTTPConcurrency = 1
 	settings.BandwidthConcurrency = 1
 	settings.BandwidthCandidates = 1
 	settings.FinalResultCount = 1
@@ -365,10 +365,10 @@ func findResult(results []model.ProbeResult, key string) *model.ProbeResult {
 
 func TestHTTPSRefillsFromRemainingTCPCandidates(t *testing.T) {
 	settings := config.DefaultSettings()
-	settings.TCPConcurrency = 1
-	settings.HTTPSConcurrency = 1
+	settings.ConnectionConcurrency = 1
+	settings.HTTPConcurrency = 1
 	settings.BandwidthConcurrency = 1
-	settings.TCPCandidateCount = 3
+	settings.HTTPCandidateCount = 3
 	settings.BandwidthCandidates = 1
 	settings.FinalResultCount = 1
 	candidates := []model.Candidate{
@@ -407,7 +407,7 @@ func TestHTTPSRefillsFromRemainingTCPCandidates(t *testing.T) {
 		seen[candidate] = true
 	}
 	stage := completedStage(updates, "https")
-	expectedAttempts := len(probed) * settings.HTTPSProbeCount
+	expectedAttempts := len(probed) * settings.HTTPProbeCount
 	if stage.Input != 5 || stage.Passed != 3 || stage.Failed != 2 || stage.AttemptsCompleted != expectedAttempts || stage.AttemptsTotal != expectedAttempts {
 		t.Fatalf("HTTPS refill progress is inconsistent: %+v", stage)
 	}
@@ -415,10 +415,10 @@ func TestHTTPSRefillsFromRemainingTCPCandidates(t *testing.T) {
 
 func TestHTTPSRefillStopsWhenTCPCandidatesAreExhausted(t *testing.T) {
 	settings := config.DefaultSettings()
-	settings.TCPConcurrency = 1
-	settings.HTTPSConcurrency = 1
+	settings.ConnectionConcurrency = 1
+	settings.HTTPConcurrency = 1
 	settings.BandwidthConcurrency = 1
-	settings.TCPCandidateCount = 3
+	settings.HTTPCandidateCount = 3
 	settings.BandwidthCandidates = 3
 	settings.FinalResultCount = 3
 	candidates := []model.Candidate{
@@ -453,10 +453,10 @@ func TestHTTPSRefillStopsWhenTCPCandidatesAreExhausted(t *testing.T) {
 
 func TestBandwidthRefillsFromRemainingHTTPSCandidates(t *testing.T) {
 	settings := config.DefaultSettings()
-	settings.TCPConcurrency = 1
-	settings.HTTPSConcurrency = 1
+	settings.ConnectionConcurrency = 1
+	settings.HTTPConcurrency = 1
 	settings.BandwidthConcurrency = 1
-	settings.TCPCandidateCount = 5
+	settings.HTTPCandidateCount = 5
 	settings.BandwidthCandidates = 3
 	settings.FinalResultCount = 3
 	candidates := []model.Candidate{
@@ -502,8 +502,8 @@ func TestBandwidthRefillsFromRemainingHTTPSCandidates(t *testing.T) {
 
 func TestEngineCompletesPipeline(t *testing.T) {
 	settings := config.DefaultSettings()
-	settings.TCPProbeCount = 2
-	settings.HTTPSProbeCount = 4
+	settings.ConnectionProbeCount = 2
+	settings.HTTPProbeCount = 4
 	var tcpAttempts, httpsAttempts int
 	engine := Engine{Dependencies: Dependencies{Fetcher: fakeFetcher{}, TCP: fakeTCP{attempts: &tcpAttempts}, HTTPS: fakeHTTPS{attempts: &httpsAttempts}, Bandwidth: fakeBandwidth{}}}
 	var updates []model.RunProgress
@@ -578,10 +578,10 @@ func (f countingBandwidth) Probe(context.Context, model.Candidate) model.Bandwid
 
 func TestResumeStagesDoNotCallReusedProbes(t *testing.T) {
 	settings := config.DefaultSettings()
-	settings.TCPConcurrency = 1
-	settings.HTTPSConcurrency = 1
+	settings.ConnectionConcurrency = 1
+	settings.HTTPConcurrency = 1
 	settings.BandwidthConcurrency = 1
-	settings.TCPCandidateCount = 2
+	settings.HTTPCandidateCount = 2
 	settings.BandwidthCandidates = 2
 	settings.FinalResultCount = 2
 	base := reusableCheckpoint(settings)

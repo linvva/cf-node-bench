@@ -44,9 +44,10 @@ func TestScoreUsesConfiguredWeights(t *testing.T) {
 		result("fast", 1, 10, 10, 10),
 		result("wide", 1, 40, 40, 100),
 	}
-	latencyFirst := Score(results, 1, 1, model.ScoreWeights{TCP: 100})
+	latencyFirst := Score(results, 1, 1, model.ScoreWeights{Connection: 100})
+	requestFirst := Score(results, 1, 1, model.ScoreWeights{HTTP: 100})
 	bandwidthFirst := Score(results, 1, 1, model.ScoreWeights{Bandwidth: 100})
-	if latencyFirst[0].Candidate.IP != "fast" || bandwidthFirst[0].Candidate.IP != "wide" {
+	if latencyFirst[0].Candidate.IP != "fast" || requestFirst[0].Candidate.IP != "fast" || bandwidthFirst[0].Candidate.IP != "wide" {
 		t.Fatalf("configured weights did not change ordering: latency=%s bandwidth=%s", latencyFirst[0].Candidate.IP, bandwidthFirst[0].Candidate.IP)
 	}
 }

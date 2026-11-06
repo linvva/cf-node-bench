@@ -49,7 +49,7 @@ func TestBuildResumeInfoWarnsWithoutInvalidating(t *testing.T) {
 		StageSettings: map[string]config.Settings{"tcp": settings}, StageNetworks: map[string]NetworkSnapshot{"tcp": {Interface: "old", IPv4: "10.0.0.2"}},
 	}
 	current := settings
-	current.TCPProbeCount++
+	current.ConnectionProbeCount++
 	info := BuildResumeInfo(checkpoint, "current", current, []source.HTTPSource{{ID: "source", URL: "https://new.test", Enabled: true}}, NetworkSnapshot{Interface: "new", IPv4: "192.168.1.2"}, now)
 	option := info.Options[1]
 	if !option.Available || len(option.Warnings) < 4 {

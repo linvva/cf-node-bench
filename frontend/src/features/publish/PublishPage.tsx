@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Button, Checkbox, Input, Modal, Switch, Tabs, toast } from "@heroui/react";
 import { CheckCircle2, Cloud, Code2, Copy, ExternalLink, FileText, GitBranch, MessageCircle, Save, Send, Trash2, X } from "lucide-react";
 import { actions, useAppStore } from "../../store";
-import type { PublicationResult, PublishCredentialTarget, PublishSaveRequest, PublishSettingsView, PublishTarget } from "../../types";
+import type { Mode, PublicationResult, PublishCredentialTarget, PublishSaveRequest, PublishSettingsView, PublishTarget } from "../../types";
+import { ProtocolTabs } from "../ProtocolTabs";
+import { publishSettingsForMode, publishTargetConfigured } from "../../lib/bridge";
 import workerSource from "../../../../deploy/telegram-relay/worker.js?raw";
 
 const labels:Record<PublishTarget,string>={cloudflare:"Cloudflare",github:"GitHub 仓库",gist:"GitHub Gist",telegram:"Telegram"};
@@ -14,12 +16,16 @@ export function PublishPage(){
   const settings=useAppStore(state=>state.publishSettings);
   const latest=useAppStore(state=>state.history.find(item=>item.state==="completed"));
   const [form,setForm]=useState<PublishSettingsView>(()=>structuredClone(settings));
+  const [targetMode,setTargetMode]=useState<Mode>("tcp_https");
+  const isH3=targetMode==="h3";
+  const selected=publishSettingsForMode(form,targetMode);
+  const targetModeLabel=isH3?"H3":"普通（TCP/HTTPS）";
   const [tokens,setTokens]=useState<PublishTokens>(emptyTokens);
   const [error,setError]=useState("");
   const [busy,setBusy]=useState("");
   const [setupGuide,setSetupGuide]=useState<SetupGuideTarget>("");
   const [relayGuideOpen,setRelayGuideOpen]=useState(false);
-  useEffect(()=>setForm(structuredClone(settings)),[settings]);
+  useEffect(()=>{setForm(structuredClone(settings));},[settings]);
 
   const request=():PublishSaveRequest=>({settings:form,...tokens});
   const save=async()=>{
@@ -34,9 +40,10 @@ export function PublishPage(){
     }catch(reason){setError(String(reason));}finally{setBusy("");}
   };
   const test=async(target:PublishTarget)=>{
-    const message=validatePublishSettings(form,tokens,target);
+    if(!publishTargetConfigured(form,target,targetMode)){setError(`${targetModeLabel} ${labels[target]} 发布目标未配置`);return;}
+    const message=validatePublishSettings(form,tokens,target,targetMode);
     if(message){setError(message);return;}
-    try{setBusy(`test-${target}`);await actions.testPublishTarget(target,request());setError("");toast.success(target==="gist"?"GitHub Gist 可访问；写权限将在发布时验证":`${labels[target]} 连接可用`);}catch(reason){setError(String(reason));}finally{setBusy("");}
+    try{setBusy(`test-${target}`);await actions.testPublishTarget(target,{...request(),testMode:targetMode});setError("");toast.success(target==="gist"?"GitHub Gist 可访问；写权限将在发布时验证":`${labels[target]} 连接可用`);}catch(reason){setError(String(reason));}finally{setBusy("");}
   };
   const clear=async(target:PublishCredentialTarget,key:keyof PublishTokens,label:string)=>{
     try{setBusy(`clear-${target}`);await actions.clearPublishCredential(target);setTokens(current=>({...current,[key]:""}));toast.success(`${label}已清除`);}catch(reason){setError(String(reason));}finally{setBusy("");}
@@ -48,18 +55,20 @@ export function PublishPage(){
 
   const patch=<K extends keyof PublishSettingsView>(key:K,value:PublishSettingsView[K])=>setForm(current=>({...current,[key]:value}));
   const statusByTarget=useMemo(()=>Object.fromEntries((latest?.publications||[]).map(value=>[value.target,value])) as Partial<Record<PublishTarget,PublicationResult>>,[latest]);
-  const enabledTargets=useMemo(()=>(Object.keys(labels) as PublishTarget[]).filter(target=>settings[target].enabled).map(target=>labels[target]),[settings]);
-  const preview=previewLine(form);
+  const enabledTargets=(mode:Mode)=>(Object.keys(labels) as PublishTarget[]).filter(target=>settings[target].enabled&&publishTargetConfigured(settings,target,mode)).map(target=>labels[target]);
+  const ordinaryTargets=enabledTargets("tcp_https"),h3Targets=enabledTargets("h3");
+  const preview=previewLine(form,isH3);
 
   return <div className="page publish-page" data-testid="publish-page">
-    <header className="page-header"><div><h1>结果发布</h1><p>成功完成的测速会自动发布到已启用目标；取消测速不会发布。</p></div><div className="page-action-area"><div className="page-actions"><Button variant="secondary" isDisabled={!latest||busy==="publish"} onPress={()=>void publishLatest()}><Send size={16}/>发布最近结果</Button><Button variant="primary" isDisabled={busy==="save"} onPress={()=>void save()}><Save size={16}/>保存设置</Button></div><p className="page-action-status" role={error?"alert":undefined} title={error}>{error||"\u00a0"}</p></div></header>
+    <header className="page-header"><div><h1>结果发布</h1><p>共用凭据；普通和 H3 目标分别保存，按每轮结果的实际协议发布。</p></div><div className="page-action-area"><div className="page-actions"><Button variant="secondary" isDisabled={!latest||busy==="publish"} onPress={()=>void publishLatest()}><Send size={16}/>发布最近结果</Button><Button variant="primary" isDisabled={busy==="save"} onPress={()=>void save()}><Save size={16}/>保存设置</Button></div><p className="page-action-status" role={error?"alert":undefined} title={error}>{error||"\u00a0"}</p></div></header>
 
-    <div className={`publish-auto-state ${enabledTargets.length?"active":"inactive"}`} aria-live="polite"><CheckCircle2 size={16}/><div><strong>{enabledTargets.length?"自动发布已生效":"自动发布尚未生效"}</strong><span>{enabledTargets.length?`测速成功完成后将自动发布到：${enabledTargets.join("、")}。发布失败不会改变测速结果。`:"当前没有已启用的发布目标；启用目标并保存设置后，测速成功完成时会自动发布。"}</span></div></div>
+    <section className="panel protocol-selection"><ProtocolTabs label="发布目标模式" value={targetMode} onChange={setTargetMode}/><small>仅切换下方编辑的发布目标，不改变测速模式。未配置的目标会跳过。</small></section>
+    <div className={`publish-auto-state ${ordinaryTargets.length||h3Targets.length?"active":"inactive"}`} aria-live="polite"><CheckCircle2 size={16}/><div><strong>{ordinaryTargets.length||h3Targets.length?"自动发布已生效":"自动发布尚未生效"}</strong><span>普通（TCP/HTTPS）：{ordinaryTargets.join("、")||"无有效目标，发布时跳过"}</span><span>H3：{h3Targets.join("、")||"无有效目标，发布时跳过"}</span><span>启用渠道并配置目标、保存后生效。</span></div></div>
 
     <div className="publish-overview">
       <section className="panel publish-section"><div className="publish-heading"><div><h2>输出字段</h2><p>TXT、GitHub 仓库、Gist 与 Telegram 详细列表使用同一行格式。</p></div></div><div className="publish-options">
         <Check label="国家代码" selected={form.output.country} onChange={country=>patch("output",{...form.output,country})}/>
-        <Check label="TCP P95" selected={form.output.tcpP95} onChange={tcpP95=>patch("output",{...form.output,tcpP95})}/>
+        <Check label="连接 P95（TCP / QUIC）" selected={form.output.tcpP95} onChange={tcpP95=>patch("output",{...form.output,tcpP95})}/>
         <Check label="HTTP 平均延迟" selected={form.output.httpLatency} onChange={httpLatency=>patch("output",{...form.output,httpLatency})}/>
         <Check label="下载带宽" selected={form.output.bandwidth} onChange={bandwidth=>patch("output",{...form.output,bandwidth})}/>
       </div><code className="publish-preview">{preview}</code></section>
@@ -71,42 +80,45 @@ export function PublishPage(){
     </div>
 
     <section className="panel publish-section target-section">
-      <TargetHeading icon={<Cloud size={17}/>} title="Cloudflare DNS" enabled={form.cloudflare.enabled} status={statusByTarget.cloudflare} onEnabled={enabled=>patch("cloudflare",{...form.cloudflare,enabled})}/>
+      <TargetHeading icon={<Cloud size={17}/>} title="Cloudflare DNS" enabled={form.cloudflare.enabled} status={statusByTarget.cloudflare} statusMode={latest?.mode} onEnabled={enabled=>patch("cloudflare",{...form.cloudflare,enabled})}/>
       <div className="publish-target-grid">
-        <div className="field field-wide"><label>记录类型</label><ModeTabs label="Cloudflare 记录类型" value={form.cloudflare.recordType} options={[{id:"A",label:"A 记录"},{id:"TXT",label:"TXT 记录"}]} onChange={recordType=>patch("cloudflare",{...form.cloudflare,recordType:recordType as "A"|"TXT"})}/><small>{form.cloudflare.recordType==="A"?"仅发布端口为 443 的 IPv4，内容为纯 IP。":"发布全部最终节点；Proxied 设置不会应用。"}</small></div>
+        <div className="field field-wide"><label>记录类型</label><ModeTabs label="Cloudflare 记录类型" value={selected.cloudflare.recordType} options={[{id:"A",label:"A 记录"},{id:"TXT",label:"TXT 记录"}]} onChange={recordType=>isH3?patch("cloudflare",{...form.cloudflare,h3:{...form.cloudflare.h3,recordType:recordType as "A"|"TXT"}}):patch("cloudflare",{...form.cloudflare,recordType:recordType as "A"|"TXT"})}/><small>{selected.cloudflare.recordType==="A"?"仅发布端口为 443 的原始 IPv4；跳过域名及其他端口。":"发布全部最终节点；Proxied 设置不会应用。"}</small></div>
         <TextField label="Zone ID" value={form.cloudflare.zoneId} onChange={zoneId=>patch("cloudflare",{...form.cloudflare,zoneId})}/>
-        <TextField label="记录名" value={form.cloudflare.recordName} placeholder="cf.example.com" onChange={recordName=>patch("cloudflare",{...form.cloudflare,recordName})}/>
+        <TextField label="记录名" value={selected.cloudflare.recordName} placeholder={isH3?"h3.example.com":"cf.example.com"} onChange={recordName=>isH3?patch("cloudflare",{...form.cloudflare,h3:{...form.cloudflare.h3,recordName}}):patch("cloudflare",{...form.cloudflare,recordName})}/>
         <NumberField label="TTL" value={form.cloudflare.ttl} min={1} max={86400} onChange={ttl=>patch("cloudflare",{...form.cloudflare,ttl})}/>
-        {form.cloudflare.recordType==="A"&&<div className="switch-field"><Switch isSelected={form.cloudflare.proxied} onChange={proxied=>patch("cloudflare",{...form.cloudflare,proxied})}><Switch.Content><Switch.Control><Switch.Thumb/></Switch.Control><span>启用 Cloudflare 代理</span></Switch.Content></Switch><small>关闭时 DNS 返回节点原始 IP。</small></div>}
+        {selected.cloudflare.recordType==="A"&&<div className="switch-field"><Switch isSelected={form.cloudflare.proxied} onChange={proxied=>patch("cloudflare",{...form.cloudflare,proxied})}><Switch.Content><Switch.Control><Switch.Thumb/></Switch.Control><span>启用 Cloudflare 代理</span></Switch.Content></Switch><small>关闭时 DNS 返回节点原始 IP。</small></div>}
         <CredentialField label="API Token" configured={form.cloudflare.tokenConfigured} value={tokens.cloudflareToken} onChange={cloudflareToken=>setTokens(current=>({...current,cloudflareToken}))} onClear={()=>void clear("cloudflare","cloudflareToken","Cloudflare 凭据")} clearing={busy==="clear-cloudflare"}/>
         <div className="field-wide target-guide"><small>需要目标域名的 Zone ID，以及仅限该 Zone 的 DNS 编辑 Token；记录无需预先创建。</small><Button variant="secondary" aria-label="Cloudflare 配置引导" onPress={()=>setSetupGuide("cloudflare")}><Cloud size={15}/>配置引导</Button></div>
-      </div><TargetActions target="cloudflare" busy={busy} onTest={test}/>
+      </div>
+      <p className="publish-mode-status">{targetModeLabel}：{publishTargetConfigured(form,"cloudflare",targetMode)?"已配置发布目标":"未配置，发布时跳过"}</p><TargetActions target="cloudflare" busy={busy} onTest={test}/>
     </section>
 
     <section className="panel publish-section target-section">
-      <TargetHeading icon={<GitBranch size={17}/>} title="GitHub 仓库" enabled={form.github.enabled} status={statusByTarget.github} onEnabled={enabled=>patch("github",{...form.github,enabled})}/>
+      <TargetHeading icon={<GitBranch size={17}/>} title="GitHub 仓库" enabled={form.github.enabled} status={statusByTarget.github} statusMode={latest?.mode} onEnabled={enabled=>patch("github",{...form.github,enabled})}/>
       <div className="publish-target-grid">
         <TextField label="Owner" value={form.github.owner} onChange={owner=>patch("github",{...form.github,owner})}/>
         <TextField label="Repository" value={form.github.repository} onChange={repository=>patch("github",{...form.github,repository})}/>
         <TextField label="Branch" value={form.github.branch} onChange={branch=>patch("github",{...form.github,branch})}/>
-        <TextField label="文件路径" value={form.github.path} onChange={path=>patch("github",{...form.github,path})}/>
+        <TextField label="文件路径" value={selected.github.path} placeholder={isH3?"h3.txt":"ip.txt"} onChange={path=>isH3?patch("github",{...form.github,h3:{path}}):patch("github",{...form.github,path})}/>
         <CredentialField label="Personal Access Token" configured={form.github.tokenConfigured} value={tokens.githubToken} onChange={githubToken=>setTokens(current=>({...current,githubToken}))} onClear={()=>void clear("github","githubToken","GitHub 仓库凭据")} clearing={busy==="clear-github"}/>
         <div className="field-wide target-guide"><small>目标分支必须已存在；结果文件可由应用创建，Token 只需目标仓库的 Contents 写权限。</small><Button variant="secondary" aria-label="GitHub 仓库配置引导" onPress={()=>setSetupGuide("github")}><GitBranch size={15}/>配置引导</Button></div>
-      </div><TargetActions target="github" busy={busy} onTest={test}/>
+      </div>
+      <p className="publish-mode-status">{targetModeLabel}：{publishTargetConfigured(form,"github",targetMode)?"已配置发布目标":"未配置，发布时跳过"}</p><TargetActions target="github" busy={busy} onTest={test}/>
     </section>
 
     <section className="panel publish-section target-section">
-      <TargetHeading icon={<FileText size={17}/>} title="GitHub Gist" enabled={form.gist.enabled} status={statusByTarget.gist} onEnabled={enabled=>patch("gist",{...form.gist,enabled})}/>
+      <TargetHeading icon={<FileText size={17}/>} title="GitHub Gist" enabled={form.gist.enabled} status={statusByTarget.gist} statusMode={latest?.mode} onEnabled={enabled=>patch("gist",{...form.gist,enabled})}/>
       <div className="publish-target-grid">
-        <TextField label="Gist ID" value={form.gist.gistId} placeholder="例如 6f4a..." help="仅更新已有 Gist；Secret Gist 只是未公开列出，任何获得链接的人仍可访问。" onChange={gistId=>patch("gist",{...form.gist,gistId})}/>
-        <TextField label="文件名" value={form.gist.filename} help="同名文件会被更新，Gist 中的其他文件不受影响。" onChange={filename=>patch("gist",{...form.gist,filename})}/>
+        <TextField label="Gist ID" value={selected.gist.gistId} placeholder="例如 6f4a..." help="仅更新已有 Gist；Secret Gist 只是未公开列出，任何获得链接的人仍可访问。" onChange={gistId=>isH3?patch("gist",{...form.gist,h3:{...form.gist.h3,gistId}}):patch("gist",{...form.gist,gistId})}/>
+        <TextField label="文件名" value={selected.gist.filename} placeholder={isH3?"h3.txt":"ip.txt"} help="同名文件会被更新，Gist 中的其他文件不受影响。" onChange={filename=>isH3?patch("gist",{...form.gist,h3:{...form.gist.h3,filename}}):patch("gist",{...form.gist,filename})}/>
         <CredentialField label="Gist Personal Access Token" configured={form.gist.tokenConfigured} value={tokens.gistToken} onChange={gistToken=>setTokens(current=>({...current,gistToken}))} onClear={()=>void clear("gist","gistToken","GitHub Gist 凭据")} clearing={busy==="clear-gist"}/>
         <div className="field-wide target-guide"><small>首次配置需要先创建包含目标文件的 Gist，再生成仅有 Gists 写权限的独立 Token。</small><Button variant="secondary" aria-label="Gist 配置引导" onPress={()=>setSetupGuide("gist")}><FileText size={15}/>配置引导</Button></div>
-      </div><TargetActions target="gist" busy={busy} onTest={test}/>
+      </div>
+      <p className="publish-mode-status">{targetModeLabel}：{publishTargetConfigured(form,"gist",targetMode)?"已配置发布目标":"未配置，发布时跳过"}</p><TargetActions target="gist" busy={busy} onTest={test}/>
     </section>
 
     <section className="panel publish-section target-section">
-      <TargetHeading icon={<MessageCircle size={17}/>} title="Telegram Bot" enabled={form.telegram.enabled} status={statusByTarget.telegram} onEnabled={enabled=>patch("telegram",{...form.telegram,enabled})}/>
+      <TargetHeading icon={<MessageCircle size={17}/>} title="Telegram Bot" enabled={form.telegram.enabled} status={statusByTarget.telegram} statusMode={latest?.mode} onEnabled={enabled=>patch("telegram",{...form.telegram,enabled})}/>
       <div className="publish-target-grid">
         <div className="field field-wide"><label>投递方式</label><ModeTabs label="Telegram 投递方式" value={form.telegram.deliveryMode} options={[{id:"direct",label:"直连 Telegram"},{id:"relay",label:"专属中继"}]} onChange={deliveryMode=>patch("telegram",{...form.telegram,deliveryMode:deliveryMode as "direct"|"relay"})}/><small>{form.telegram.deliveryMode==="direct"?"应用直接连接 Telegram Bot API，不使用系统代理。":"应用通过 HTTPS 连接你自己部署的 Worker，再由 Worker 转发到 Telegram。"}</small></div>
         <div className="field field-wide"><label>推送内容</label><ModeTabs label="Telegram 推送内容" value={form.telegram.contentMode} options={[{id:"summary",label:"仅汇总"},{id:"details",label:"汇总与节点列表"}]} onChange={contentMode=>patch("telegram",{...form.telegram,contentMode:contentMode as "summary"|"details"})}/><small>汇总包含耗时、通过节点数及 Cloudflare、GitHub 仓库和 Gist 发布状态。</small></div>
@@ -121,22 +133,42 @@ export function PublishPage(){
     </section>
     {setupGuide==="cloudflare"&&<CloudflareGuide onClose={()=>setSetupGuide("")}/>}
     {setupGuide==="github"&&<GitHubGuide onClose={()=>setSetupGuide("")}/>}
-    {setupGuide==="gist"&&<GistGuide filename={form.gist.filename.trim()||"ip.txt"} onClose={()=>setSetupGuide("")}/>}
+    {setupGuide==="gist"&&<GistGuide filename={selected.gist.filename.trim()||(isH3?"h3.txt":"ip.txt")} onClose={()=>setSetupGuide("")}/>}
     {relayGuideOpen&&<RelayGuide onClose={()=>setRelayGuideOpen(false)}/>}
   </div>;
 }
 
-export function validatePublishSettings(form:PublishSettingsView,tokens:PublishTokens,target?:PublishTarget){
+export function validatePublishSettings(form:PublishSettingsView,tokens:PublishTokens,target?:PublishTarget,testMode:Mode="tcp_https"){
   if(!Number.isInteger(form.request.timeoutMs)||form.request.timeoutMs<1000||form.request.timeoutMs>60000)return "发布请求超时必须在 1000 到 60000 ms 之间";
   if(!Number.isInteger(form.request.maxRetries)||form.request.maxRetries<0||form.request.maxRetries>5)return "发布重试次数必须在 0 到 5 之间";
   if(!Number.isInteger(form.request.retryDelayMs)||form.request.retryDelayMs<0||form.request.retryDelayMs>10000)return "发布重试间隔必须在 0 到 10000 ms 之间";
   if(form.cloudflare.ttl!==1&&(!Number.isInteger(form.cloudflare.ttl)||form.cloudflare.ttl<60||form.cloudflare.ttl>86400))return "Cloudflare TTL 必须为 1 或在 60 到 86400 之间";
+  const normalizeName=(value:string)=>value.trim().toLowerCase().replace(/\.$/,"");
+  const validPath=(value:string)=>Boolean(value.trim())&&!value.trim().startsWith("/")&&value.trim().split("/").every(part=>part!==""&&part!=="."&&part!=="..");
+  const modes:Mode[]=target?[testMode]:["tcp_https","h3"];
+  for(const mode of modes){
+    const selected=publishSettingsForMode(form,mode),label=mode==="h3"?"H3":"普通";
+    const cf=selected.cloudflare,github=selected.github,gist=selected.gist;
+    if(!target||target==="cloudflare"){
+      const host=normalizeName(cf.recordName);
+      if(host&&(!host.includes(".")||host.length>253||/^\d+(?:\.\d+){3}$/.test(host)||!host.split(".").every(part=>/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(part))))return `${label} Cloudflare 记录名必须是有效的完整域名`;
+      if(!["A","TXT"].includes(cf.recordType))return `${label} Cloudflare 记录类型必须是 A 或 TXT`;
+    }
+    if((!target||target==="github")&&github.path.trim()&&!validPath(github.path))return `${label} GitHub 文件路径必须是仓库内的有效相对路径`;
+    if(!target||target==="gist"){
+      const id=gist.gistId.trim(),filename=gist.filename.trim();
+      if(Boolean(id)!==Boolean(filename))return `${label} Gist ID 和文件名必须同时填写或同时留空`;
+      if(/[\s/\\?#]/.test(id))return `${label} Gist ID 必须填写 ID，不能包含 URL 或空白`;
+      if(/[\/\\\r\n]/.test(filename)||[".",".."].includes(filename))return `${label} Gist 文件名不能包含路径`;
+    }
+  }
+  if(form.cloudflare.h3.recordName.trim()&&normalizeName(form.cloudflare.h3.recordName)===normalizeName(form.cloudflare.recordName))return "H3 Cloudflare 记录名必须与普通目标不同";
+  if(form.github.h3.path.trim()&&form.github.h3.path.trim()===form.github.path.trim())return "H3 GitHub 文件路径必须与普通目标不同";
+  if(publishTargetConfigured(form,"gist","h3")&&form.gist.h3.gistId.trim().toLowerCase()===form.gist.gistId.trim().toLowerCase()&&form.gist.h3.filename.trim()===form.gist.filename.trim())return "H3 Gist 必须使用不同的 Gist ID 或文件名";
   const checking=(value:PublishTarget)=>target===value||(!target&&form[value].enabled);
-  if(checking("cloudflare")&&(!form.cloudflare.zoneId.trim()||!form.cloudflare.recordName.trim()||(!form.cloudflare.tokenConfigured&&!tokens.cloudflareToken.trim())))return "启用 Cloudflare 前必须填写 Token、Zone ID 和记录名";
-  if(!form.github.path.trim()||form.github.path.startsWith("/")||form.github.path.split("/").includes(".."))return "GitHub 文件路径必须是仓库内的有效相对路径";
-  if(checking("github")&&(!form.github.owner.trim()||!form.github.repository.trim()||!form.github.branch.trim()||(!form.github.tokenConfigured&&!tokens.githubToken.trim())))return "启用 GitHub 前必须填写 Token、仓库、分支和文件路径";
-  if(!form.gist.filename.trim())return "Gist 文件名不能为空";
-  if(checking("gist")&&(!form.gist.gistId.trim()||(!form.gist.tokenConfigured&&!tokens.gistToken.trim())))return "启用 Gist 前必须填写 Token、Gist ID 和文件名";
+  if(checking("cloudflare")&&(!form.cloudflare.zoneId.trim()||(!form.cloudflare.tokenConfigured&&!tokens.cloudflareToken.trim())))return "启用 Cloudflare 前必须填写 Token 和 Zone ID";
+  if(checking("github")&&(!form.github.owner.trim()||!form.github.repository.trim()||!form.github.branch.trim()||(!form.github.tokenConfigured&&!tokens.githubToken.trim())))return "启用 GitHub 前必须填写 Token、仓库和分支";
+  if(checking("gist")&&!form.gist.tokenConfigured&&!tokens.gistToken.trim())return "启用 Gist 前必须填写 Token";
   if(form.telegram.relayUrl.trim()){
     try{const relay=new URL(form.telegram.relayUrl);if(relay.protocol!=="https:"||!relay.host||relay.pathname!=="/telegram"||relay.username||relay.password||relay.search||relay.hash)return "Telegram 中继 URL 必须是以 /telegram 结尾且不含凭据和查询参数的 HTTPS 地址";}catch{return "Telegram 中继 URL 必须是以 /telegram 结尾且不含凭据和查询参数的 HTTPS 地址";}
   }
@@ -145,16 +177,16 @@ export function validatePublishSettings(form:PublishSettingsView,tokens:PublishT
   return "";
 }
 
-function previewLine(form:PublishSettingsView){
-  const values=[`104.18.1.20:443${form.output.country?"#US":""}`];
-  if(form.output.tcpP95)values.push("TCP22ms");
-  if(form.output.httpLatency)values.push("HTTP44ms");
+function previewLine(form:PublishSettingsView,isH3=false){
+  const values=[`104.18.1.20:443${form.output.country?"#US":""}${isH3?(form.output.country?"|H3":"#H3"):""}`];
+  if(form.output.tcpP95)values.push((isH3?"QUIC22ms":"TCP22ms"));
+  if(form.output.httpLatency)values.push((isH3?"HTTP344ms":"HTTP44ms"));
   if(form.output.bandwidth)values.push("186Mbps");
   return values.join("|");
 }
 
-function TargetHeading({icon,title,enabled,status,onEnabled}:{icon:React.ReactNode;title:string;enabled:boolean;status?:PublicationResult;onEnabled:(value:boolean)=>void}){
-  return <div className="publish-heading"><div className="target-title"><span>{icon}</span><div><h2>{title}</h2><p>{status?<PublicationStatus result={status}/>:"尚无发布记录"}</p></div></div><Switch aria-label={`启用 ${title}`} isSelected={enabled} onChange={onEnabled}><Switch.Content><Switch.Control><Switch.Thumb/></Switch.Control></Switch.Content></Switch></div>;
+function TargetHeading({icon,title,enabled,status,statusMode,onEnabled}:{icon:React.ReactNode;title:string;enabled:boolean;status?:PublicationResult;statusMode?:Mode;onEnabled:(value:boolean)=>void}){
+  return <div className="publish-heading"><div className="target-title"><span>{icon}</span><div><h2>{title}</h2><p>{status?<>最近 {statusMode==="h3"?"H3":"普通（TCP/HTTPS）"} · <PublicationStatus result={status}/></>:"尚无发布记录"}</p></div></div><Switch aria-label={`启用 ${title}`} isSelected={enabled} onChange={onEnabled}><Switch.Content><Switch.Control><Switch.Thumb/></Switch.Control></Switch.Content></Switch></div>;
 }
 
 export function PublicationStatus({result}:{result:PublicationResult}){

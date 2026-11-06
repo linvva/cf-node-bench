@@ -16,11 +16,16 @@ import (
 	"github.com/linvva/cf-node-bench/internal/source"
 )
 
+const dataVersion = 1
+
 type data struct {
-	Settings config.Settings     `json:"settings"`
-	Publish  publish.Settings    `json:"publish"`
-	Sources  []source.HTTPSource `json:"sources"`
-	History  []model.RunSummary  `json:"history"`
+	Version            int                 `json:"version"`
+	Settings           config.Settings     `json:"settings"`
+	Publish            publish.Settings    `json:"publish"`
+	Sources            []source.HTTPSource `json:"sources"`
+	History            []model.RunSummary  `json:"history"`
+	MigrationMessage   string              `json:"migrationNotice,omitempty"`
+	CurrentResultRunID string              `json:"currentResultRunId,omitempty"`
 }
 
 type Store struct {
@@ -32,38 +37,73 @@ type Store struct {
 const appDataDirectory = "CF Node Bench"
 
 func Open(path string) (*Store, error) {
-	store := &Store{path: path, data: data{Settings: config.DefaultSettings(), Publish: publish.DefaultSettings(), Sources: defaultSources()}}
+	store := &Store{path: path, data: data{Version: dataVersion, Settings: config.DefaultSettings(), Publish: publish.DefaultSettings(), Sources: defaultSources()}}
 	content, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	legacy := false
 	if err == nil {
+		var header struct {
+			Version int `json:"version"`
+		}
+		if err := json.Unmarshal(content, &header); err != nil {
+			return nil, err
+		}
+		if header.Version > dataVersion {
+			return nil, errors.New("配置文件版本不兼容")
+		}
+		legacy = header.Version < dataVersion
 		if err := json.Unmarshal(content, &store.data); err != nil {
 			return nil, err
 		}
+		if legacy {
+			if err := store.importLegacyProfiles(content); err != nil {
+				return nil, err
+			}
+		}
 	}
-	store.data.Settings.MigrateLegacy()
+	store.data.Version = dataVersion
+	if legacy {
+		store.data.Settings.MigrateLegacy()
+	}
 	store.data.Settings.Normalize()
 	if err := store.data.Settings.Validate(); err != nil {
-		store.data.Settings = config.DefaultSettings()
+		return nil, err
 	}
 	store.data.Publish.Normalize()
 	if err := store.data.Publish.Validate(); err != nil {
-		store.data.Publish = publish.DefaultSettings()
+		return nil, err
 	}
 	store.normalize()
+	if legacy {
+		if err := store.migrateFiles(content); err != nil {
+			return nil, err
+		}
+	}
 	return store, nil
 }
 
+func (s *Store) MigrationNotice() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.MigrationMessage
+}
+
 func (s *Store) normalize() {
-	if s.data.Settings.AllowedPorts == nil {
-		s.data.Settings.AllowedPorts = []int{}
+	if len(s.data.History) > 40 {
+		s.data.History = s.data.History[:40]
 	}
-	if s.data.Settings.AllowedCountries == nil {
-		s.data.Settings.AllowedCountries = []string{}
-	}
-	if s.data.Settings.BlockedCountries == nil {
-		s.data.Settings.BlockedCountries = []string{}
+	for _, settings := range []*config.Settings{&s.data.Settings} {
+		if settings.AllowedPorts == nil {
+			settings.AllowedPorts = []int{}
+		}
+		if settings.AllowedCountries == nil {
+			settings.AllowedCountries = []string{}
+		}
+		if settings.BlockedCountries == nil {
+			settings.BlockedCountries = []string{}
+		}
 	}
 	if s.data.Sources == nil {
 		s.data.Sources = []source.HTTPSource{}
@@ -72,6 +112,12 @@ func (s *Store) normalize() {
 		s.data.History = []model.RunSummary{}
 	}
 	for index := range s.data.History {
+		s.data.History[index].Mode = model.NormalizeMode(s.data.History[index].Mode)
+		for resultIndex := range s.data.History[index].Results {
+			if s.data.History[index].Results[resultIndex].Mode == "" {
+				s.data.History[index].Results[resultIndex].Mode = s.data.History[index].Mode
+			}
+		}
 		if s.data.History[index].Results == nil {
 			s.data.History[index].Results = []model.ProbeResult{}
 		}
@@ -82,7 +128,11 @@ func (s *Store) normalize() {
 			s.data.History[index].Publications = []model.PublicationResult{}
 		}
 		if s.data.History[index].ScoreWeights == (model.ScoreWeights{}) {
-			s.data.History[index].ScoreWeights = config.LegacyScoreWeights()
+			if s.data.History[index].Mode == model.ModeH3 {
+				s.data.History[index].ScoreWeights = model.ScoreWeights{Bandwidth: 40, HTTP3: 25, QUIC: 15, Reliability: 15, Jitter: 5}
+			} else {
+				s.data.History[index].ScoreWeights = config.LegacyScoreWeights()
+			}
 		}
 		if s.data.History[index].ReusedStages == nil {
 			s.data.History[index].ReusedStages = []string{}
@@ -109,7 +159,11 @@ func OpenDefault() (*Store, error) {
 func (s *Store) Settings() config.Settings {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.data.Settings
+	settings := s.data.Settings
+	settings.AllowedPorts = append([]int{}, settings.AllowedPorts...)
+	settings.AllowedCountries = append([]string{}, settings.AllowedCountries...)
+	settings.BlockedCountries = append([]string{}, settings.BlockedCountries...)
+	return settings
 }
 func (s *Store) Sources() []source.HTTPSource {
 	s.mu.RLock()
@@ -122,12 +176,24 @@ func (s *Store) History() []model.RunSummary {
 	return append([]model.RunSummary{}, s.data.History...)
 }
 
+func (s *Store) CurrentResultID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.data.CurrentResultRunID != "" {
+		return s.data.CurrentResultRunID
+	}
+	if len(s.data.History) > 0 {
+		return s.data.History[0].RunID
+	}
+	return ""
+}
+
 func (s *Store) LatestCompletedResults() []model.ProbeResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, summary := range s.data.History {
 		if summary.State == "completed" {
-			return append([]model.ProbeResult(nil), summary.Results...)
+			return append([]model.ProbeResult{}, summary.Results...)
 		}
 	}
 	return []model.ProbeResult{}
@@ -144,14 +210,19 @@ func (s *Store) PublishSettingsView() publish.SettingsView {
 }
 
 func (s *Store) SaveSettings(settings config.Settings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	settings.Normalize()
 	if err := settings.Validate(); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	previous := s.data.Settings
 	s.data.Settings = settings
-	return s.persistLocked()
+	if err := s.persistLocked(); err != nil {
+		s.data.Settings = previous
+		return err
+	}
+	return nil
 }
 
 func (s *Store) SavePublishSettings(request publish.SaveRequest) (publish.SettingsView, error) {
@@ -161,8 +232,10 @@ func (s *Store) SavePublishSettings(request publish.SaveRequest) (publish.Settin
 	if err := next.Validate(); err != nil {
 		return publish.SettingsView{}, err
 	}
+	previous := s.data.Publish
 	s.data.Publish = next
 	if err := s.persistLocked(); err != nil {
+		s.data.Publish = previous
 		return publish.SettingsView{}, err
 	}
 	return next.View(), nil
@@ -171,23 +244,24 @@ func (s *Store) SavePublishSettings(request publish.SaveRequest) (publish.Settin
 func (s *Store) ClearPublishCredential(target string) (publish.SettingsView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	current := &s.data.Publish
 	switch target {
 	case "cloudflare":
-		s.data.Publish.Cloudflare.APIToken = ""
-		s.data.Publish.Cloudflare.Enabled = false
+		current.Cloudflare.APIToken = ""
+		current.Cloudflare.Enabled = false
 	case "github":
-		s.data.Publish.GitHub.Token = ""
-		s.data.Publish.GitHub.Enabled = false
+		current.GitHub.Token = ""
+		current.GitHub.Enabled = false
 	case "gist":
-		s.data.Publish.Gist.Token = ""
-		s.data.Publish.Gist.Enabled = false
+		current.Gist.Token = ""
+		current.Gist.Enabled = false
 	case "telegram":
-		s.data.Publish.Telegram.BotToken = ""
-		s.data.Publish.Telegram.Enabled = false
+		current.Telegram.BotToken = ""
+		current.Telegram.Enabled = false
 	case "telegramRelay":
-		s.data.Publish.Telegram.RelayKey = ""
-		if s.data.Publish.Telegram.DeliveryMode == publish.TelegramDeliveryRelay {
-			s.data.Publish.Telegram.Enabled = false
+		current.Telegram.RelayKey = ""
+		if current.Telegram.DeliveryMode == publish.TelegramDeliveryRelay {
+			current.Telegram.Enabled = false
 		}
 	default:
 		return publish.SettingsView{}, errors.New("未知发布目标")
@@ -195,7 +269,7 @@ func (s *Store) ClearPublishCredential(target string) (publish.SettingsView, err
 	if err := s.persistLocked(); err != nil {
 		return publish.SettingsView{}, err
 	}
-	return s.data.Publish.View(), nil
+	return current.View(), nil
 }
 
 func (s *Store) SaveSources(sources []source.HTTPSource) error {
@@ -222,9 +296,14 @@ func (s *Store) UpdateSourceStatus(id string, fetched time.Time, status string, 
 func (s *Store) AddHistory(summary model.RunSummary) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	summary.Mode = model.NormalizeMode(summary.Mode)
+	for index := range summary.Results {
+		summary.Results[index].Mode = summary.Mode
+	}
 	s.data.History = append([]model.RunSummary{summary}, s.data.History...)
-	if len(s.data.History) > 20 {
-		s.data.History = s.data.History[:20]
+	s.data.CurrentResultRunID = summary.RunID
+	if len(s.data.History) > 40 {
+		s.data.History = s.data.History[:40]
 	}
 	return s.persistLocked()
 }
@@ -247,6 +326,8 @@ func (s *Store) UpdatePublication(runID string, result model.PublicationResult) 
 		if s.data.History[historyIndex].RunID != runID {
 			continue
 		}
+		// History readers and queued jobs may still hold the previous slice.
+		s.data.History[historyIndex].Publications = append([]model.PublicationResult{}, s.data.History[historyIndex].Publications...)
 		for publicationIndex := range s.data.History[historyIndex].Publications {
 			if s.data.History[historyIndex].Publications[publicationIndex].Target == result.Target {
 				s.data.History[historyIndex].Publications[publicationIndex] = result
@@ -277,7 +358,7 @@ func (s *Store) persistLocked() error {
 func (s *Store) SaveCheckpoint(checkpoint runengine.Checkpoint) error {
 	checkpoint.Version = runengine.CheckpointVersion
 	checkpoint.UpdatedAt = time.Now()
-	path := filepath.Join(filepath.Dir(s.path), "checkpoint.json.gz")
+	path := s.checkpointPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -302,8 +383,12 @@ func (s *Store) SaveCheckpoint(checkpoint runengine.Checkpoint) error {
 	return os.Rename(temporary, path)
 }
 
+func (s *Store) checkpointPath() string {
+	return filepath.Join(filepath.Dir(s.path), "checkpoint.json.gz")
+}
+
 func (s *Store) Checkpoint() (runengine.Checkpoint, bool, error) {
-	path := filepath.Join(filepath.Dir(s.path), "checkpoint.json.gz")
+	path := s.checkpointPath()
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return runengine.Checkpoint{}, false, nil

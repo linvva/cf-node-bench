@@ -33,11 +33,11 @@ describe("CF Node Bench workspace",()=>{
   it("shows a clear settings relationship error",async()=>{
     render(<App/>); await screen.findByRole("heading",{name:"测速工作台"});
     fireEvent.click(screen.getByRole("button",{name:"设置"}));
-    const tcp=await screen.findByLabelText("TCP 候选池");
+    const tcp=await screen.findByLabelText("HTTP 候选池");
     fireEvent.change(tcp,{target:{value:"10"}});
     fireEvent.change(screen.getByLabelText("带宽目标通过数"),{target:{value:"30"}});
     fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
-    expect(await screen.findByText("带宽目标通过数不能大于 TCP 候选数")).toBeInTheDocument();
+    expect(await screen.findByText("带宽目标通过数不能大于 HTTP 候选数")).toBeInTheDocument();
   });
 
   it("shows advanced probe controls and rejects conflicting country filters",async()=>{
@@ -103,7 +103,7 @@ describe("CF Node Bench workspace",()=>{
     fireEvent.click(screen.getByRole("button",{name:"发布"}));
     expect(await screen.findByRole("heading",{name:"结果发布"})).toBeInTheDocument();
     expect(screen.getByText("自动发布尚未生效")).toBeInTheDocument();
-    expect(screen.getByText(/启用目标并保存设置后，测速成功完成时会自动发布/)).toBeInTheDocument();
+    expect(screen.getByText(/启用渠道并配置目标、保存后生效/)).toBeInTheDocument();
     expect(screen.getByText("启用 Cloudflare 代理")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab",{name:"TXT 记录"}));
     expect(screen.queryByText("启用 Cloudflare 代理")).not.toBeInTheDocument();
@@ -115,7 +115,7 @@ describe("CF Node Bench workspace",()=>{
     fireEvent.click(screen.getByRole("button",{name:"发布"}));
     fireEvent.click(await screen.findByRole("switch",{name:"启用 Cloudflare DNS"}));
     fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
-    expect(await screen.findByText("启用 Cloudflare 前必须填写 Token、Zone ID 和记录名")).toBeInTheDocument();
+    expect(await screen.findByText("启用 Cloudflare 前必须填写 Token 和 Zone ID")).toBeInTheDocument();
   });
 
   it("guides Cloudflare and GitHub repository setup with minimal permissions",async()=>{
@@ -164,7 +164,7 @@ describe("CF Node Bench workspace",()=>{
     open.mockRestore();
     fireEvent.click(screen.getByRole("switch",{name:"启用 GitHub Gist"}));
     fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
-    expect(await screen.findByText("启用 Gist 前必须填写 Token、Gist ID 和文件名")).toBeInTheDocument();
+    expect(await screen.findByText("启用 Gist 前必须填写 Token")).toBeInTheDocument();
   });
 
   it("shows dedicated Telegram relay fields and validates its separate key",async()=>{
@@ -247,7 +247,7 @@ describe("CF Node Bench workspace",()=>{
     expect(option).toHaveTextContent("个输入");
     fireEvent.click(option);
     expect(await screen.findByRole("heading",{name:"确认使用阶段检查点"})).toBeInTheDocument();
-    expect(screen.getByText("TCP 测量或候选过滤设置已变化")).toBeInTheDocument();
+    expect(screen.getByText("连接测量或候选过滤设置已变化")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button",{name:"仍然重测"}));
     await waitFor(()=>expect(screen.getByRole("button",{name:/取消测速/})).toBeInTheDocument());
     const stageList=screen.getByLabelText("测速阶段");

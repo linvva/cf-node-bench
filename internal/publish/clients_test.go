@@ -91,6 +91,40 @@ func TestCloudflareTXTAndEmptyA(t *testing.T) {
 	}
 }
 
+func TestCloudflareDoesNotDeleteRecordsForDomainOnlyH3Results(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		t.Error("domain-only A publication must not access or replace DNS records")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	settings := DefaultSettings()
+	settings.Cloudflare.RecordType = "A"
+	result := sampleResult("1.1.1.1", 443, "HK")
+	result.Mode = model.ModeH3
+	result.Candidate.AddressType = model.AddressDomain
+	result.Candidate.Host = "nodes.example.com"
+	publication := testService(server).PublishCloudflare(t.Context(), model.RunSummary{Mode: model.ModeH3, Results: []model.ProbeResult{result}}, settings)
+	if requests != 0 || publication.Eligible != 0 || publication.Skipped != 1 || !strings.Contains(publication.Message, "未修改") {
+		t.Fatalf("domain-only publication = %+v, requests=%d", publication, requests)
+	}
+}
+
+func TestTelegramIncludesModeInSummary(t *testing.T) {
+	for _, mode := range []model.Mode{model.ModeTCPHTTPS, model.ModeH3} {
+		summary := testSummary()
+		summary.Mode = mode
+		label := "模式：TCP/HTTPS"
+		if mode == model.ModeH3 {
+			label = "模式：H3"
+		}
+		if got := telegramSummary(summary, DefaultSettings(), nil); !strings.Contains(got, label) {
+			t.Fatalf("summary for %s has no mode label: %q", mode, got)
+		}
+	}
+}
+
 func TestGitHubUpdatesWithSHAAndSkipsUnchangedContent(t *testing.T) {
 	summary := testSummary()
 	expected := FormatResults(summary.Results, DefaultSettings().Output)

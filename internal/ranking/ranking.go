@@ -8,6 +8,7 @@ import (
 )
 
 func Score(results []model.ProbeResult, tcpMinimumSuccessRate, httpsMinimumSuccessRate float64, weights model.ScoreWeights) []model.ProbeResult {
+	weights = weights.ForMode(model.ModeTCPHTTPS)
 	eligible := make([]model.ProbeResult, 0, len(results))
 	for _, result := range results {
 		if result.TCP.SuccessRate < tcpMinimumSuccessRate || result.HTTPS.SuccessRate < httpsMinimumSuccessRate || result.Bandwidth.Mbps <= 0 {

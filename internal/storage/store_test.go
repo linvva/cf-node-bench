@@ -139,7 +139,7 @@ func TestOpenNormalizesLegacyNullCollections(t *testing.T) {
 		t.Fatal("legacy null collections were not normalized")
 	}
 	settings := store.Settings()
-	if settings.TCPProbeCount != 3 || settings.HTTPSProbeCount != 3 || settings.LegacyProbeCount != 0 {
+	if settings.ConnectionProbeCount != 3 || settings.HTTPProbeCount != 3 {
 		t.Fatalf("legacy probe count was not migrated: %+v", settings)
 	}
 	if settings.SourceTimeoutMS == 0 || settings.BlockedCountries == nil {
@@ -260,13 +260,14 @@ func TestPublishSettingsMigrateV1AndManageGistToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := store.PublishSettings()
-	if settings.Version != 3 || settings.Gist.Enabled || settings.Gist.Filename != "ip.txt" || settings.Cloudflare.APIToken != "cf-old" || settings.GitHub.Token != "gh-old" || settings.Telegram.BotToken != "tg-old" || settings.Telegram.DeliveryMode != publish.TelegramDeliveryDirect {
+	if settings.Version != publish.SettingsVersion || settings.Gist.Enabled || settings.Gist.Filename != "" || settings.Cloudflare.APIToken != "cf-old" || settings.GitHub.Token != "gh-old" || settings.Telegram.BotToken != "tg-old" || settings.Telegram.DeliveryMode != publish.TelegramDeliveryDirect {
 		t.Fatalf("migration changed existing settings: %+v", settings)
 	}
 
 	view := store.PublishSettingsView()
 	view.Gist.Enabled = true
 	view.Gist.GistID = "gist-id"
+	view.Gist.Filename = "ip.txt"
 	saved, err := store.SavePublishSettings(publish.SaveRequest{Settings: view, GistToken: "gist-secret"})
 	if err != nil {
 		t.Fatal(err)

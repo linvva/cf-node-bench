@@ -17,6 +17,8 @@ const (
 	StageHTTPS     = "https"
 	StageBandwidth = "bandwidth"
 	StageRanking   = "ranking"
+	StageQUIC      = "quic"
+	StageHTTP3     = "http3"
 )
 
 type NetworkSnapshot struct {
@@ -25,18 +27,22 @@ type NetworkSnapshot struct {
 }
 
 func BuildResumeInfo(checkpoint Checkpoint, currentRunID string, settings config.Settings, sources []source.HTTPSource, network NetworkSnapshot, now time.Time) ResumeInfo {
+	if settings.RequireH3 {
+		return buildH3ResumeInfo(checkpoint, currentRunID, settings, sources, network, now)
+	}
 	info := ResumeInfo{Options: []ResumeOption{}}
 	if checkpoint.RunID == "" || checkpoint.RunID != currentRunID {
 		return info
 	}
 	info.BaseRunID = checkpoint.RunID
 	info.UpdatedAt = checkpoint.UpdatedAt
+	candidateCount := countIf(checkpoint.Candidates, func(c model.Candidate) bool { return c.AddressType != model.AddressDomain })
 	definitions := []struct {
 		stage, requiredStage string
 		input                int
 		dataAvailable        bool
 	}{
-		{StageTCP, "source", len(checkpoint.Candidates), len(checkpoint.Candidates) > 0},
+		{StageTCP, "source", candidateCount, candidateCount > 0},
 		{StageHTTPS, "tcp", len(checkpoint.TCPResults), len(checkpoint.TCPResults) > 0},
 		{StageBandwidth, "retained", len(checkpoint.HTTPSResults), len(checkpoint.HTTPSResults) > 0},
 		{StageRanking, "bandwidth", len(checkpoint.BandwidthResults), len(checkpoint.BandwidthResults) > 0},
@@ -45,8 +51,12 @@ func BuildResumeInfo(checkpoint Checkpoint, currentRunID string, settings config
 		_, completed := checkpoint.Stage(definition.requiredStage)
 		measuredAt := checkpoint.CompletedAt[definition.requiredStage]
 		option := ResumeOption{Stage: definition.stage, Available: completed && definition.dataAvailable, Input: definition.input, MeasuredAt: measuredAt, Warnings: []string{}}
+		if checkpoint.Settings.RequireH3 != settings.RequireH3 {
+			option.Available = option.Available && definition.stage == StageTCP
+			option.Warnings = append(option.Warnings, "H3 要求已变化，只能复用候选并从 TCP 重新探测")
+		}
 		if option.Available {
-			option.Warnings = checkpointWarnings(checkpoint, definition.stage, settings, sources, network, now)
+			option.Warnings = append(option.Warnings, checkpointWarnings(checkpoint, definition.stage, settings, sources, network, now)...)
 		}
 		info.Options = append(info.Options, option)
 	}
@@ -68,13 +78,13 @@ func checkpointWarnings(checkpoint Checkpoint, stage string, settings config.Set
 	}
 	if stage == StageHTTPS || stage == StageBandwidth || stage == StageRanking {
 		previous := stageSettings(checkpoint, "tcp")
-		if previous.ConnectTimeoutMS != settings.ConnectTimeoutMS || previous.TCPProbeCount != settings.TCPProbeCount || !sameCandidateFilters(previous, settings) {
+		if previous.ConnectTimeoutMS != settings.ConnectTimeoutMS || previous.ConnectionProbeCount != settings.ConnectionProbeCount || !sameCandidateFilters(previous, settings) {
 			warnings = append(warnings, "TCP 测量或候选过滤设置已变化")
 		}
 	}
 	if stage == StageBandwidth || stage == StageRanking {
 		previous := stageSettings(checkpoint, "https")
-		if previous.RequestTimeoutMS != settings.RequestTimeoutMS || previous.HTTPSProbeCount != settings.HTTPSProbeCount || previous.TCPCandidateCount != settings.TCPCandidateCount {
+		if previous.RequestTimeoutMS != settings.RequestTimeoutMS || previous.HTTPProbeCount != settings.HTTPProbeCount || previous.HTTPCandidateCount != settings.HTTPCandidateCount {
 			warnings = append(warnings, "HTTPS 测量或候选池设置已变化")
 		}
 	}
@@ -140,6 +150,9 @@ func sameEnabledSources(left, right []source.HTTPSource) bool {
 }
 
 type Checkpoint struct {
+	QUICResults      []model.ProbeResult        `json:"quicResults,omitempty"`
+	HTTP3Results     []model.ProbeResult        `json:"http3Results,omitempty"`
+	RetainedKeys     []string                   `json:"retainedKeys,omitempty"`
 	Version          int                        `json:"version"`
 	RunID            string                     `json:"runId"`
 	ParentRunID      string                     `json:"parentRunId,omitempty"`
@@ -187,11 +200,41 @@ type RunPlan struct {
 
 func ValidStartStage(stage string) bool {
 	switch stage {
-	case StageSource, StageTCP, StageHTTPS, StageBandwidth, StageRanking:
+	case StageSource, StageTCP, StageHTTPS, StageQUIC, StageHTTP3, StageBandwidth, StageRanking:
 		return true
 	default:
 		return false
 	}
+}
+
+// Reusing candidates is safe across protocol or verification-host changes. Measured
+// results are not: enforce this here as well as in the resume options shown by the UI.
+func runStartStage(stage string, settings config.Settings, base *Checkpoint) string {
+	if !ValidStartStage(stage) || stage == StageSource || base == nil {
+		return StageSource
+	}
+	connectionStage := StageTCP
+	if settings.RequireH3 {
+		connectionStage = StageQUIC
+	}
+	changed := base.Settings.RequireH3 != settings.RequireH3
+	if settings.RequireH3 {
+		changed = changed || stage == StageTCP || stage == StageHTTPS
+		for _, measuredStage := range []string{StageQUIC, StageHTTP3, StageBandwidth} {
+			if stageSettings(*base, measuredStage).EffectiveVerificationHost() != settings.EffectiveVerificationHost() {
+				changed = true
+			}
+		}
+	} else {
+		changed = changed || stage == StageQUIC || stage == StageHTTP3
+	}
+	if changed {
+		if _, complete := base.Stage(StageSource); complete && len(base.Candidates) > 0 {
+			return connectionStage
+		}
+		return StageSource
+	}
+	return stage
 }
 
 func (c Checkpoint) Stage(name string) (model.StageProgress, bool) {
@@ -201,4 +244,66 @@ func (c Checkpoint) Stage(name string) (model.StageProgress, bool) {
 		}
 	}
 	return model.StageProgress{}, false
+}
+
+func buildH3ResumeInfo(c Checkpoint, currentID string, settings config.Settings, sources []source.HTTPSource, network NetworkSnapshot, now time.Time) ResumeInfo {
+	info := ResumeInfo{Options: []ResumeOption{}}
+	if c.RunID == "" || c.RunID != currentID {
+		return info
+	}
+	info.BaseRunID, info.UpdatedAt = c.RunID, c.UpdatedAt
+	for _, definition := range []struct {
+		stage, required string
+		count           int
+	}{
+		{StageQUIC, "source", len(c.Candidates)}, {StageHTTP3, StageQUIC, len(c.QUICResults)},
+		{StageBandwidth, StageHTTP3, len(c.HTTP3Results)}, {StageRanking, StageBandwidth, len(c.BandwidthResults)},
+	} {
+		_, complete := c.Stage(definition.required)
+		option := ResumeOption{Stage: definition.stage, Available: complete && definition.count > 0, Input: definition.count, MeasuredAt: c.CompletedAt[definition.required], Warnings: []string{}}
+		measured := stageSettings(c, definition.required)
+		if c.Settings.RequireH3 != settings.RequireH3 {
+			option.Available = option.Available && definition.stage == StageQUIC
+			option.Warnings = append(option.Warnings, "H3 要求已变化，只能复用候选并从 QUIC 重新探测")
+		}
+		if definition.stage != StageQUIC && measured.EffectiveVerificationHost() != settings.EffectiveVerificationHost() {
+			option.Available = false
+			option.Warnings = append(option.Warnings, "验证域名已变化，必须从 QUIC 重新探测")
+		}
+		if option.Available {
+			if now.Sub(c.UpdatedAt) > 30*time.Minute {
+				option.Warnings = append(option.Warnings, "检查点已超过 30 分钟，DNS 和指标可能已变化")
+			}
+			if previous, ok := c.StageNetworks[definition.required]; ok && previous != network {
+				option.Warnings = append(option.Warnings, "网络接口或本机 IPv4 已变化")
+			}
+			if !sameEnabledSources(c.Sources, sources) {
+				option.Warnings = append(option.Warnings, "启用的数据源已变化，候选仍来自原检查点")
+			}
+			if definition.stage != StageQUIC {
+				previous := stageSettings(c, StageQUIC)
+				if previous.H3ConnectTimeoutMS != settings.H3ConnectTimeoutMS || previous.ConnectionProbeCount != settings.ConnectionProbeCount || !sameCandidateFilters(previous, settings) {
+					option.Warnings = append(option.Warnings, "QUIC 测量或候选过滤设置已变化")
+				}
+			}
+			if definition.stage == StageBandwidth || definition.stage == StageRanking {
+				previous := stageSettings(c, StageHTTP3)
+				if previous.HTTPProbeCount != settings.HTTPProbeCount || previous.H3RequestTimeoutMS != settings.H3RequestTimeoutMS || previous.HTTPCandidateCount != settings.HTTPCandidateCount {
+					option.Warnings = append(option.Warnings, "HTTP/3 测量设置已变化")
+				}
+			}
+			if definition.stage == StageRanking {
+				previous := stageSettings(c, StageBandwidth)
+				if previous.H3BandwidthTestURL != settings.H3BandwidthTestURL || previous.MaxDownloadBytes != settings.MaxDownloadBytes || previous.BandwidthTimeoutMS != settings.BandwidthTimeoutMS || previous.BandwidthCandidates != settings.BandwidthCandidates {
+					option.Warnings = append(option.Warnings, "H3 带宽测量设置已变化")
+				}
+			}
+			// DNS is deliberately a snapshot for these stages; do not trigger network requests while ranking.
+			if definition.stage != StageQUIC {
+				option.Warnings = append(option.Warnings, "复用本轮 IPv4 解析快照；如需刷新 DNS，请从 QUIC 开始")
+			}
+		}
+		info.Options = append(info.Options, option)
+	}
+	return info
 }
