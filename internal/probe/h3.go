@@ -285,7 +285,8 @@ func classifyH3(ctx context.Context, err error) model.FailureReason {
 	}
 	var handshakeErr *quicHandshakeError
 	var timeoutErr net.Error
-	if errors.As(err, &handshakeErr) && (errors.Is(err, context.DeadlineExceeded) || errors.As(err, &timeoutErr) && timeoutErr.Timeout()) {
+	// An outer url.Error can report false for Timeout through our handshake wrapper.
+	if errors.As(err, &handshakeErr) && (errors.Is(handshakeErr, context.DeadlineExceeded) || errors.As(handshakeErr, &timeoutErr) && timeoutErr.Timeout()) {
 		return model.FailureQUICHandshakeTimeout
 	}
 	if failure := classify(ctx, err); failure != model.FailureTCP {

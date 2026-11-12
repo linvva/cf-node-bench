@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -132,6 +133,27 @@ func TestH3CannotFallbackToWorkingTCP(t *testing.T) {
 	quicStats := (QUICProber{Timeout: 80 * time.Millisecond, WorkerHost: h3TestHost, MinSuccessRate: 1}).Probe(t.Context(), candidate, 3, nil)
 	if quicStats.Failures[model.FailureQUICHandshakeTimeout] != 1 || quicStats.Attempts != 1 || quicStats.Skipped != 2 {
 		t.Fatalf("QUIC=%+v", quicStats)
+	}
+}
+
+func TestH3ClassifiesHandshakeTimeoutThroughHTTPError(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want model.FailureReason
+	}{
+		{"idle timeout", &quic.IdleTimeoutError{}, model.FailureQUICHandshakeTimeout},
+		{"handshake timeout", &quic.HandshakeTimeoutError{}, model.FailureQUICHandshakeTimeout},
+		{"deadline", context.DeadlineExceeded, model.FailureQUICHandshakeTimeout},
+		{"cancelled", context.Canceled, model.FailureCancelled},
+		{"other failure", fmt.Errorf("connection failed"), model.FailureQUIC},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := &url.Error{Op: "Get", URL: "https://" + h3TestHost, Err: &quicHandshakeError{test.err}}
+			if got := classifyH3(t.Context(), err); got != test.want {
+				t.Fatalf("classify wrapped handshake error: got %s, want %s", got, test.want)
+			}
+		})
 	}
 }
 
