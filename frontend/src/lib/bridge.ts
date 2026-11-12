@@ -6,8 +6,8 @@ type Handler<T> = (value: T) => void;
 
 declare global {
   interface Window {
-    go?: { main?: { App?: { Bootstrap(): Promise<Bootstrap>; SaveSettings(value: Settings): Promise<void>; SaveSources(value: HTTPSource[]): Promise<void>; SavePublishSettings(value: PublishSaveRequest): Promise<PublishSettingsView>; ClearPublishCredential(target: PublishCredentialTarget): Promise<PublishSettingsView>; TestPublishTarget(target: PublishTarget, value: PublishSaveRequest): Promise<void>; PublishRun(runId: string, target: "all" | PublishTarget): Promise<void>; StartRun(value: RunStartRequest): Promise<string>; CancelRun(): Promise<boolean> } } };
-    runtime?: { EventsOn(name: string, handler: Handler<unknown>): () => void; BrowserOpenURL?(url: string): void };
+    go?: { main?: { App?: { Bootstrap(): Promise<Bootstrap>; SaveSettings(value: Settings): Promise<void>; SaveSources(value: HTTPSource[]): Promise<void>; SavePublishSettings(value: PublishSaveRequest): Promise<PublishSettingsView>; ClearPublishCredential(target: PublishCredentialTarget): Promise<PublishSettingsView>; TestPublishTarget(target: PublishTarget, value: PublishSaveRequest): Promise<void>; PublishRun(runId: string, target: "all" | PublishTarget): Promise<void>; SelectLocalFiles(): Promise<string[] | null>; StartLocalFiles(paths: string[]): Promise<string>; StartRun(value: RunStartRequest): Promise<string>; CancelRun(): Promise<boolean> } } };
+    runtime?: { EventsOn(name: string, handler: Handler<unknown>): () => void; BrowserOpenURL?(url: string): void; OnFileDrop?(handler:(x:number,y:number,paths:string[])=>void,useDropTarget:boolean):void; OnFileDropOff?():void };
   }
 }
 
@@ -294,6 +294,18 @@ export const bridge = {
         mockPublication({runId,result:{target:current,state:eligible?"succeeded":"skipped",items:eligible,eligible,skipped,recordType:current==="cloudflare"?publishSettings.cloudflare.recordType:undefined,url:current==="gist"?`https://gist.githubusercontent.com/example/${encodeURIComponent(publishSettings.gist.gistId)}/raw/${encodeURIComponent(publishSettings.gist.filename)}`:undefined,message:current==="cloudflare"?`已写入 ${publishSettings.cloudflare.recordName} 的 ${eligible} 条记录；跳过 ${skipped} 个域名或非 443 端口候选`:current==="github"?`已发布 ${publishSettings.github.path}`:"发布成功",startedAt:now,finishedAt:now}});
       }
     },180);
+  },
+  async selectLocalFiles():Promise<string[] | null> {
+    if(window.go?.main?.App) return window.go.main.App.SelectLocalFiles();
+    throw new Error("浏览器预览不支持读取本地文件，请使用桌面应用");
+  },
+  async startLocalFiles(paths:string[]):Promise<string> {
+    if(window.go?.main?.App) return window.go.main.App.StartLocalFiles(paths);
+    throw new Error("浏览器预览不支持读取本地文件，请使用桌面应用");
+  },
+  onFileDrop(handler:(paths:string[])=>void){
+    window.runtime?.OnFileDrop?.((_x,_y,paths)=>handler(paths),false);
+    return ()=>window.runtime?.OnFileDropOff?.();
   },
   async startRun(request:RunStartRequest) {
     if(window.go?.main?.App) return window.go.main.App.StartRun(request);

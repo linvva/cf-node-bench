@@ -7,6 +7,10 @@ import (
 	"github.com/linvva/cf-node-bench/internal/model"
 )
 
+func cannotReachSuccessRate(planned, completed, successes int, minimum float64) bool {
+	return completed < planned && float64(successes+planned-completed)/float64(planned) < minimum
+}
+
 func Summarize(attempts int, samples []float64, failures map[model.FailureReason]int) model.ProbeStats {
 	ordered := slices.Clone(samples)
 	slices.Sort(ordered)

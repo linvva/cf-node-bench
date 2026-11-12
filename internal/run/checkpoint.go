@@ -55,6 +55,10 @@ func BuildResumeInfo(checkpoint Checkpoint, currentRunID string, settings config
 			option.Available = option.Available && definition.stage == StageTCP
 			option.Warnings = append(option.Warnings, "H3 要求已变化，只能复用候选并从 TCP 重新探测")
 		}
+		if restart := earlyStoppedRestartStage(checkpoint, settings, definition.stage); option.Available && restart != "" {
+			option.Available = false
+			option.Warnings = append(option.Warnings, earlyStoppedRestartWarning(restart))
+		}
 		if option.Available {
 			option.Warnings = append(option.Warnings, checkpointWarnings(checkpoint, definition.stage, settings, sources, network, now)...)
 		}
@@ -73,7 +77,7 @@ func checkpointWarnings(checkpoint Checkpoint, stage string, settings config.Set
 	if networkRecorded && (measuredNetwork.Interface != network.Interface || measuredNetwork.IPv4 != network.IPv4) {
 		warnings = append(warnings, "网络接口或本机 IPv4 已变化")
 	}
-	if !sameEnabledSources(checkpoint.Sources, sources) {
+	if !checkpoint.LocalFiles && !sameEnabledSources(checkpoint.Sources, sources) {
 		warnings = append(warnings, "启用的数据源已变化，候选仍来自原检查点")
 	}
 	if stage == StageHTTPS || stage == StageBandwidth || stage == StageRanking {
@@ -150,6 +154,7 @@ func sameEnabledSources(left, right []source.HTTPSource) bool {
 }
 
 type Checkpoint struct {
+	LocalFiles       bool                       `json:"localFiles,omitempty"`
 	QUICResults      []model.ProbeResult        `json:"quicResults,omitempty"`
 	HTTP3Results     []model.ProbeResult        `json:"http3Results,omitempty"`
 	RetainedKeys     []string                   `json:"retainedKeys,omitempty"`
@@ -234,7 +239,63 @@ func runStartStage(stage string, settings config.Settings, base *Checkpoint) str
 		}
 		return StageSource
 	}
+	if restart := earlyStoppedRestartStage(*base, settings, stage); restart != "" {
+		return restart
+	}
 	return stage
+}
+
+// Early rejection only proves failure under the settings that made that decision.
+// A relaxed threshold or different sample count requires completing a fresh probe.
+func earlyStoppedRestartStage(c Checkpoint, settings config.Settings, start string) string {
+	order := []string{StageTCP, StageHTTPS, StageBandwidth, StageRanking}
+	if settings.RequireH3 {
+		order[0], order[1] = StageQUIC, StageHTTP3
+	}
+	startIndex := slices.Index(order, start)
+	if startIndex < 1 {
+		return ""
+	}
+	for index, stage := range order[:min(startIndex, 2)] {
+		previous := stageSettings(c, stage)
+		changed := settings.ConnectionMinSuccessRate < previous.ConnectionMinSuccessRate || settings.ConnectionProbeCount != previous.ConnectionProbeCount
+		if index == 1 {
+			changed = settings.HTTPMinSuccessRate < previous.HTTPMinSuccessRate || settings.HTTPProbeCount != previous.HTTPProbeCount
+		}
+		if changed && checkpointHasSkippedSamples(c, stage) {
+			return stage
+		}
+	}
+	return ""
+}
+
+func checkpointHasSkippedSamples(c Checkpoint, stage string) bool {
+	results := c.TCPResults
+	switch stage {
+	case StageHTTPS:
+		results = c.HTTPSResults
+	case StageQUIC:
+		results = c.QUICResults
+	case StageHTTP3:
+		results = c.HTTP3Results
+	}
+	for _, result := range results {
+		if stage == StageTCP && result.TCP.Skipped > 0 || stage == StageHTTPS && result.HTTPS.Skipped > 0 ||
+			stage == StageQUIC && result.QUIC.Skipped > 0 || stage == StageHTTP3 && result.HTTP3.Skipped > 0 {
+			return true
+		}
+		for _, endpoint := range result.Endpoints {
+			if stage == StageQUIC && endpoint.QUIC.Skipped > 0 || stage == StageHTTP3 && endpoint.HTTP3.Skipped > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func earlyStoppedRestartWarning(stage string) string {
+	label := map[string]string{StageTCP: "TCP", StageHTTPS: "HTTPS", StageQUIC: "QUIC", StageHTTP3: "HTTP/3"}[stage]
+	return label + " 存在提前淘汰的未完成采样；降低成功率门槛或改变采样次数后，必须从该阶段重新探测"
 }
 
 func (c Checkpoint) Stage(name string) (model.StageProgress, bool) {
@@ -270,6 +331,10 @@ func buildH3ResumeInfo(c Checkpoint, currentID string, settings config.Settings,
 			option.Available = false
 			option.Warnings = append(option.Warnings, "验证域名已变化，必须从 QUIC 重新探测")
 		}
+		if restart := earlyStoppedRestartStage(c, settings, definition.stage); option.Available && restart != "" {
+			option.Available = false
+			option.Warnings = append(option.Warnings, earlyStoppedRestartWarning(restart))
+		}
 		if option.Available {
 			if now.Sub(c.UpdatedAt) > 30*time.Minute {
 				option.Warnings = append(option.Warnings, "检查点已超过 30 分钟，DNS 和指标可能已变化")
@@ -277,7 +342,7 @@ func buildH3ResumeInfo(c Checkpoint, currentID string, settings config.Settings,
 			if previous, ok := c.StageNetworks[definition.required]; ok && previous != network {
 				option.Warnings = append(option.Warnings, "网络接口或本机 IPv4 已变化")
 			}
-			if !sameEnabledSources(c.Sources, sources) {
+			if !c.LocalFiles && !sameEnabledSources(c.Sources, sources) {
 				option.Warnings = append(option.Warnings, "启用的数据源已变化，候选仍来自原检查点")
 			}
 			if definition.stage != StageQUIC {

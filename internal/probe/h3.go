@@ -20,15 +20,17 @@ import (
 )
 
 type QUICProber struct {
-	Timeout    time.Duration
-	WorkerHost string
-	RootCAs    *x509.CertPool
+	Timeout        time.Duration
+	WorkerHost     string
+	RootCAs        *x509.CertPool
+	MinSuccessRate float64
 }
 
 func (p QUICProber) Probe(ctx context.Context, candidate model.Candidate, attempts int, onAttempt func()) model.ProbeStats {
 	samples := make([]float64, 0, attempts)
 	failures := map[model.FailureReason]int{}
-	for index := 0; index < attempts && ctx.Err() == nil; index++ {
+	completed, skipped := 0, 0
+	for completed < attempts && ctx.Err() == nil {
 		attemptCtx, cancel := context.WithTimeout(ctx, p.Timeout)
 		started := time.Now()
 		var duration time.Duration
@@ -48,16 +50,24 @@ func (p QUICProber) Probe(ctx context.Context, candidate model.Candidate, attemp
 			samples = append(samples, milliseconds(duration))
 		}
 		cancel()
+		completed++
 		if onAttempt != nil {
 			onAttempt()
 		}
+		if ctx.Err() == nil && cannotReachSuccessRate(attempts, completed, len(samples), p.MinSuccessRate) {
+			skipped = attempts - completed
+			break
+		}
 	}
-	return Summarize(attempts, samples, failures)
+	stats := Summarize(completed, samples, failures)
+	stats.Skipped = skipped
+	return stats
 }
 
 type HTTP3Prober struct {
 	ConnectTimeout time.Duration
 	RequestTimeout time.Duration
+	MinSuccessRate float64
 	WorkerHost     string
 	RootCAs        *x509.CertPool
 	Path           string
@@ -70,7 +80,8 @@ func (p HTTP3Prober) Probe(ctx context.Context, candidate model.Candidate, attem
 	if path == "" {
 		path = "/cdn-cgi/trace"
 	}
-	for index := 0; index < attempts && ctx.Err() == nil; index++ {
+	completed, skipped := 0, 0
+	for completed < attempts && ctx.Err() == nil {
 		attemptCtx, cancel := context.WithTimeout(ctx, p.RequestTimeout)
 		started := time.Now()
 		failure := p.attempt(attemptCtx, candidate, "https://"+p.WorkerHost+path)
@@ -80,11 +91,18 @@ func (p HTTP3Prober) Probe(ctx context.Context, candidate model.Candidate, attem
 			samples = append(samples, milliseconds(time.Since(started)))
 		}
 		cancel()
+		completed++
 		if onAttempt != nil {
 			onAttempt()
 		}
+		if ctx.Err() == nil && cannotReachSuccessRate(attempts, completed, len(samples), p.MinSuccessRate) {
+			skipped = attempts - completed
+			break
+		}
 	}
-	return Summarize(attempts, samples, failures)
+	stats := Summarize(completed, samples, failures)
+	stats.Skipped = skipped
+	return stats
 }
 
 func (p HTTP3Prober) attempt(ctx context.Context, candidate model.Candidate, target string) model.FailureReason {

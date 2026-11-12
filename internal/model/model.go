@@ -75,6 +75,7 @@ const (
 
 type ProbeStats struct {
 	Attempts    int                   `json:"attempts"`
+	Skipped     int                   `json:"skipped,omitempty"`
 	Successes   int                   `json:"successes"`
 	SuccessRate float64               `json:"successRate"`
 	AverageMS   float64               `json:"averageMs"`
@@ -143,6 +144,7 @@ type StageProgress struct {
 	Passed            int       `json:"passed"`
 	Failed            int       `json:"failed"`
 	AttemptsCompleted int       `json:"attemptsCompleted,omitempty"`
+	AttemptsSkipped   int       `json:"attemptsSkipped,omitempty"`
 	AttemptsTotal     int       `json:"attemptsTotal,omitempty"`
 	DurationMS        int64     `json:"durationMs"`
 	State             string    `json:"state"`
@@ -150,6 +152,7 @@ type StageProgress struct {
 }
 
 type RunProgress struct {
+	LocalFiles         bool                  `json:"localFiles,omitempty"`
 	Mode               Mode                  `json:"mode,omitempty"`
 	LogicalCandidates  int                   `json:"logicalCandidates,omitempty"`
 	PhysicalCandidates int                   `json:"physicalCandidates,omitempty"`
@@ -164,6 +167,7 @@ type RunProgress struct {
 }
 
 type RunSummary struct {
+	LocalFiles         bool                  `json:"localFiles,omitempty"`
 	Mode               Mode                  `json:"mode,omitempty"`
 	WorkerHost         string                `json:"workerHost,omitempty"`
 	LogicalCandidates  int                   `json:"logicalCandidates,omitempty"`

@@ -81,6 +81,45 @@ func TestVerificationHostChangeCannotBypassFreshProbes(t *testing.T) {
 	}
 }
 
+func TestEarlyStoppedMeasurementsCannotBypassFreshProbes(t *testing.T) {
+	for _, measuredStage := range []string{StageTCP, StageHTTPS, StageQUIC, StageHTTP3} {
+		t.Run(measuredStage, func(t *testing.T) {
+			candidate := model.Candidate{AddressType: model.AddressIPv4, IP: "192.0.2.1", Port: 443}
+			engine, settings, _, connection, request, bandwidth := h3Fixture([]model.Candidate{candidate})
+			settings.RequireH3 = measuredStage == StageQUIC || measuredStage == StageHTTP3
+			settings.ConnectionMinSuccessRate, settings.HTTPMinSuccessRate = 1, 1
+			engine.Dependencies.TCP, engine.Dependencies.HTTPS, engine.Dependencies.Bandwidth = connection, request, bandwidth
+			input := h3RunInput()
+			var checkpoint Checkpoint
+			input.Plan.Save = func(c Checkpoint) error { checkpoint = c; return nil }
+			engine.Run(t.Context(), "original", settings, input, nil)
+			incomplete := model.ProbeStats{Attempts: 1, Skipped: 2}
+			switch measuredStage {
+			case StageTCP:
+				checkpoint.TCPResults[0].TCP = incomplete
+			case StageHTTPS:
+				checkpoint.HTTPSResults[0].HTTPS = incomplete
+			case StageQUIC:
+				checkpoint.QUICResults[0].Endpoints[0].QUIC = incomplete
+			case StageHTTP3:
+				checkpoint.HTTP3Results[0].Endpoints[0].HTTP3 = incomplete
+			}
+			settings.ConnectionMinSuccessRate, settings.HTTPMinSuccessRate = 2.0/3, 2.0/3
+			connectionCalls, requestCalls := connection.calls[candidate.Key()], request.calls[candidate.Key()]
+			result := engine.Run(t.Context(), "resumed", settings, RunInput{Plan: RunPlan{Base: &checkpoint, StartStage: StageRanking}}, nil)
+			if result.StartStage != measuredStage || result.State != "completed" || len(result.Results) != 1 {
+				t.Fatalf("ranking bypassed fresh probes: %+v", result)
+			}
+			if measuredStage == StageTCP || measuredStage == StageQUIC {
+				connectionCalls++
+			}
+			if connection.calls[candidate.Key()] != connectionCalls || request.calls[candidate.Key()] != requestCalls+1 {
+				t.Fatalf("unexpected resumed calls: connection=%d request=%d", connection.calls[candidate.Key()], request.calls[candidate.Key()])
+			}
+		})
+	}
+}
+
 func TestRunUsesFixedSharedSettingsSnapshot(t *testing.T) {
 	for _, requireH3 := range []bool{false, true} {
 		engine, settings, _, quic, http3, band := h3Fixture([]model.Candidate{{AddressType: model.AddressIPv4, IP: "192.0.2.1", Port: 443, Country: "US"}})

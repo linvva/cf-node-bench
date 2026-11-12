@@ -183,6 +183,30 @@ func (a *App) SaveSources(sources []source.HTTPSource) error {
 }
 
 func (a *App) StartRun(request runengine.StartRequest) (string, error) {
+	return a.startRun(request, nil)
+}
+
+func (a *App) SelectLocalFiles() ([]string, error) {
+	if a.manager.Current() != "" {
+		return nil, runengine.ErrAlreadyRunning
+	}
+	if a.ctx == nil {
+		return nil, fmt.Errorf("文件选择仅在桌面应用中可用")
+	}
+	return runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:   "选择节点文件开始测速",
+		Filters: []runtime.FileFilter{{DisplayName: "节点文件 (*.csv, *.txt, *.json)", Pattern: "*.csv;*.txt;*.json"}},
+	})
+}
+
+func (a *App) StartLocalFiles(paths []string) (string, error) {
+	if len(paths) == 0 {
+		return "", fmt.Errorf("请选择节点文件")
+	}
+	return a.startRun(runengine.StartRequest{StartStage: runengine.StageSource}, paths)
+}
+
+func (a *App) startRun(request runengine.StartRequest, paths []string) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.manager.Current() != "" {
@@ -192,12 +216,20 @@ func (a *App) StartRun(request runengine.StartRequest) (string, error) {
 	if err := settings.Validate(); err != nil {
 		return "", err
 	}
+	var localFiles *source.ParseResult
+	if paths != nil {
+		parsed, err := source.ReadLocalFiles(a.appContext(), paths, settings.RequireH3)
+		if err != nil {
+			return "", err
+		}
+		localFiles = &parsed
+	}
 	a.engine.Dependencies.Fetcher = newTrackingFetcher(a.store, settings)
-	a.engine.Dependencies.TCP = probe.TCPProber{Timeout: settings.ConnectTimeout()}
-	a.engine.Dependencies.HTTPS = probe.HTTPSProber{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout()}
+	a.engine.Dependencies.TCP = probe.TCPProber{Timeout: settings.ConnectTimeout(), MinSuccessRate: settings.ConnectionMinSuccessRate}
+	a.engine.Dependencies.HTTPS = probe.HTTPSProber{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout(), MinSuccessRate: settings.HTTPMinSuccessRate}
 	a.engine.Dependencies.Bandwidth = probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.BandwidthTestURL}
-	a.engine.Dependencies.QUIC = probe.QUICProber{Timeout: settings.ConnectTimeout(), WorkerHost: settings.EffectiveVerificationHost()}
-	a.engine.Dependencies.HTTP3 = probe.HTTP3Prober{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout(), WorkerHost: settings.EffectiveVerificationHost()}
+	a.engine.Dependencies.QUIC = probe.QUICProber{Timeout: settings.ConnectTimeout(), WorkerHost: settings.EffectiveVerificationHost(), MinSuccessRate: settings.ConnectionMinSuccessRate}
+	a.engine.Dependencies.HTTP3 = probe.HTTP3Prober{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout(), WorkerHost: settings.EffectiveVerificationHost(), MinSuccessRate: settings.HTTPMinSuccessRate}
 	a.engine.Dependencies.H3Bandwidth = probe.H3BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.EffectiveBandwidthTestURL()}
 	stage := request.StartStage
 	if stage == "" {
@@ -213,7 +245,7 @@ func (a *App) StartRun(request runengine.StartRequest) (string, error) {
 	networkSnapshot := runengine.NetworkSnapshot{Interface: network.Interface, IPv4: network.IPv4}
 	var base *runengine.Checkpoint
 	retained := []model.ProbeResult{}
-	if stage == runengine.StageSource && settings.RetainPreviousResults {
+	if localFiles == nil && stage == runengine.StageSource && settings.RetainPreviousResults {
 		for _, summary := range a.store.History() {
 			if summary.State == "completed" && model.NormalizeMode(summary.Mode) == settings.ProbeMode() && (!settings.RequireH3 || summary.WorkerHost == settings.EffectiveVerificationHost()) {
 				retained = summary.Results
@@ -247,7 +279,7 @@ func (a *App) StartRun(request runengine.StartRequest) (string, error) {
 		}
 		base = &checkpoint
 	}
-	input := runengine.RunInput{Sources: a.store.Sources(), Retained: retained, Plan: runengine.RunPlan{StartStage: stage, Base: base, Network: networkSnapshot, Save: a.store.SaveCheckpoint}}
+	input := runengine.RunInput{LocalFiles: localFiles, Sources: a.store.Sources(), Retained: retained, Plan: runengine.RunPlan{StartStage: stage, Base: base, Network: networkSnapshot, Save: a.store.SaveCheckpoint}}
 	return a.manager.Start(a.appContext(), a.engine, settings, input, func(progress model.RunProgress) {
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "run:progress", progress)

@@ -1,4 +1,33 @@
 import { expect, test } from "@playwright/test";
+import type { RunProgress } from "../src/types";
+
+test("early failed probes show skipped work without inflating executed attempts",async({page},testInfo)=>{
+  await page.addInitScript(()=>{
+    window.runtime={EventsOn:(name,handler)=>{
+      if(name==="run:progress")(window as typeof window&{__probeProgress?:(value:RunProgress)=>void}).__probeProgress=handler;
+      return ()=>{};
+    }};
+  });
+  await page.goto("/");
+  await expect(page.getByRole("heading",{name:"测速工作台"})).toBeVisible();
+  await page.getByRole("tab",{name:"H3",exact:true}).click();
+  await expect(page.getByRole("tab",{name:"H3",exact:true})).toHaveAttribute("aria-selected","true");
+  const update=async(completed:number,state:"running"|"completed")=>page.evaluate(({completed,state})=>{
+    (window as typeof window&{__probeProgress?:(value:RunProgress)=>void}).__probeProgress?.({runId:"early-stop",mode:"h3",state,startedAt:new Date().toISOString(),stages:[{name:"quic",input:3,passed:0,failed:completed,attemptsCompleted:completed,attemptsSkipped:completed*2,attemptsTotal:9,durationMs:2000,state}],failures:{quic_timeout:completed}});
+  },{completed,state});
+  await update(2,"running");
+  await expect(page.getByLabel("当前测速进度")).toContainText("2 / 9 次探测 · 提前跳过 4 次");
+  await expect(page.getByText("1 次/秒",{exact:true})).toBeVisible();
+  await expect(page.getByText("1 秒",{exact:true})).toBeVisible();
+  const stage=page.locator(".stage").filter({hasText:"QUIC"});
+  await expect(stage).toContainText("提前跳过 4 次");
+  await page.screenshot({path:testInfo.outputPath("early-stop-progress.png")});
+  await update(3,"completed");
+  await expect(page.getByRole("progressbar",{name:"QUIC进度"})).toHaveAttribute("aria-valuenow","100");
+  await expect(stage).toContainText("0 通过 · 3 失败");
+  await expect(stage).toContainText("提前跳过 6 次");
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBe(0);
+});
 
 test("workspace remains stable through a complete run",async({page},testInfo)=>{
   await page.addInitScript(()=>{

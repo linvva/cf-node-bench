@@ -4,7 +4,7 @@ import { Clipboard, Download, RotateCw, Search, Send, SlidersHorizontal, X } fro
 import { actions, useAppStore } from "../../store";
 import { connectionWeight, httpWeight } from "../../lib/scoring";
 import { candidateAddress, connectionStats, httpStats } from "../../lib/modes";
-import type { Mode, ProbeResult, PublishTarget, RunSummary } from "../../types";
+import type { Mode, ProbeResult, ProbeStats, PublishTarget, RunSummary } from "../../types";
 import { PublicationStatus } from "../publish/PublishPage";
 
 type SortKey = "score" | "tcp" | "https" | "bandwidth";
@@ -82,7 +82,7 @@ export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: 
   };
 
   return <section className="panel results-panel">
-    <div className="section-heading"><h2>测速结果{summary?` · ${isH3?"H3":"TCP/HTTPS"}`:""}</h2><span>{summary?.state === "cancelled" ? "任务已取消" : summary ? `完成于 ${new Date(summary.finishedAt).toLocaleTimeString("zh-CN")}` : "等待首次测速"}</span></div>
+    <div className="section-heading"><h2>测速结果{summary?` · ${isH3?"H3":"TCP/HTTPS"}${summary.localFiles?" · 本地文件":""}`:""}</h2><span>{summary?.state === "cancelled" ? "任务已取消" : summary ? `完成于 ${new Date(summary.finishedAt).toLocaleTimeString("zh-CN")}` : "等待首次测速"}</span></div>
     {isH3&&<p className="h3-context">{results.length?"H3 入口已验证 · IPv4":"检测目标：H3 入口 · IPv4"}{summary?.workerHost?` · ${summary.workerHost}`:""}。域名按本轮全部解析 IP 的较差成绩排名；不代表完整 XHTTP、ECH 或 ProxyIP 出站已验证。</p>}
     {summary?.state==="completed"&&<div className="publication-strip" aria-label="发布状态">{summary.publications.length?summary.publications.map(result=><div className="publication-item" key={result.target}><strong>{{cloudflare:"Cloudflare",github:"GitHub 仓库",gist:"Gist",telegram:"Telegram"}[result.target]}</strong><PublicationStatus result={result}/><span className="spacer"/><Button isIconOnly variant="tertiary" aria-label={`重试 ${result.target}`} isDisabled={result.state==="queued"||result.state==="running"} onPress={()=>void publish(result.target)}><RotateCw size={14}/></Button></div>):<><span className="results-summary">尚无发布记录</span><span className="spacer"/><Button variant="tertiary" onPress={()=>void publish("all")}><Send size={14}/>发布结果</Button></>}</div>}
     <div className="results-toolbar">
@@ -111,8 +111,9 @@ export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: 
     </Table.Content></Table.ScrollContainer></Table> : <div className="empty-results"><div><Search size={26} /><strong>{summary?.state === "cancelled" ? "测速已取消" : "暂无结果"}</strong><span>{summary ? "当前条件下没有合格节点" : "开始测速后，合格节点将直接显示在这里"}</span></div></div>}
     {selected && <Drawer isOpen onOpenChange={(open) => { if (!open) setSelected(undefined); }}><Drawer.Trigger className="sr-only" aria-label="节点明细"><span /></Drawer.Trigger><Drawer.Backdrop><Drawer.Content className="result-drawer" placement="right"><Drawer.Dialog><Drawer.Header><Drawer.Heading>{keyOf(selected)}</Drawer.Heading><Drawer.CloseTrigger aria-label="关闭"><X size={17} /></Drawer.CloseTrigger></Drawer.Header><Drawer.Body>
       <p className="source-meta">{selected.candidate.country || "未知国家"} · {selected.candidate.addressType.toUpperCase()} · {selected.candidate.sourceId}</p>
+      {selected.candidate.addressType!=="domain"&&<><SamplingNote label={connectionLabel} stats={connectionStats(selected)}/><SamplingNote label={httpLabel} stats={httpStats(selected)}/></>}
       <div className="drawer-grid"><Metric label={`${connectionLabel} 成功率`} value={percent(connectionStats(selected).successRate)} /><Metric label={`${connectionLabel} P50 / P95`} value={`${ms(connectionStats(selected).p50Ms)} / ${ms(connectionStats(selected).p95Ms)}`} /><Metric label={`${httpLabel} 成功率`} value={percent(httpStats(selected).successRate)} /><Metric label={`${isH3?"HTTP/3":"HTTP"} 平均延迟`} value={ms(httpStats(selected).averageMs)} /><Metric label={`${httpLabel} 抖动`} value={ms(httpStats(selected).jitterMs)} /><Metric label="下载带宽" value={`${selected.bandwidth.mbps.toFixed(1)} Mbps`} /><Metric label="首字节" value={ms(selected.bandwidth.ttfbMs)} /><Metric label="实际下载" value={`${(selected.bandwidth.bytes / 1048576).toFixed(1)} MiB`} /></div>
-      {isH3&&<section className="endpoint-details" aria-label="逐 IP 检测明细"><h3>本轮 IPv4 明细</h3><p className="source-meta">{selected.candidate.addressType==="domain"?"DNS 解析时间：":"检测时间："}{selected.resolvedAt?new Date(selected.resolvedAt).toLocaleString("zh-CN"):"未记录"}。后续 DNS 变化及 IPv6 不在本轮验证范围内。</p>{selected.endpoints?.map(endpoint=><article key={endpoint.ip}><h4>{endpoint.ip}:{selected.candidate.port}</h4><div className="drawer-grid"><Metric label="QUIC 成功率" value={percent(endpoint.quic.successRate)}/><Metric label="QUIC P95" value={ms(endpoint.quic.p95Ms)}/><Metric label="HTTP/3 成功率" value={percent(endpoint.http3.successRate)}/><Metric label="HTTP/3 P95" value={ms(endpoint.http3.p95Ms)}/><Metric label="下载带宽" value={endpoint.bandwidth.mbps.toFixed(1)+" Mbps"}/><Metric label="实际下载" value={(endpoint.bandwidth.bytes/1048576).toFixed(1)+" MiB"}/></div></article>)}</section>}
+      {isH3&&<section className="endpoint-details" aria-label="逐 IP 检测明细"><h3>本轮 IPv4 明细</h3><p className="source-meta">{selected.candidate.addressType==="domain"?"DNS 解析时间：":"检测时间："}{selected.resolvedAt?new Date(selected.resolvedAt).toLocaleString("zh-CN"):"未记录"}。后续 DNS 变化及 IPv6 不在本轮验证范围内。</p>{selected.endpoints?.map(endpoint=><article key={endpoint.ip}><h4>{endpoint.ip}:{selected.candidate.port}</h4><SamplingNote label="QUIC" stats={endpoint.quic}/><SamplingNote label="HTTP/3" stats={endpoint.http3}/><div className="drawer-grid"><Metric label="QUIC 成功率" value={percent(endpoint.quic.successRate)}/><Metric label="QUIC P95" value={ms(endpoint.quic.p95Ms)}/><Metric label="HTTP/3 成功率" value={percent(endpoint.http3.successRate)}/><Metric label="HTTP/3 P95" value={ms(endpoint.http3.p95Ms)}/><Metric label="下载带宽" value={endpoint.bandwidth.mbps.toFixed(1)+" Mbps"}/><Metric label="实际下载" value={(endpoint.bandwidth.bytes/1048576).toFixed(1)+" MiB"}/></div></article>)}</section>}
       <div className="score-breakdown"><h3>评分明细 · {selected.score.toFixed(1)}</h3>{([
         [connectionLabel,isH3?selected.parts.quic??0:selected.parts.tcp,summary?connectionWeight(summary.scoreWeights,summary.mode):0],
         [httpLabel,isH3?selected.parts.http3??0:selected.parts.https,summary?httpWeight(summary.scoreWeights,summary.mode):0],
@@ -126,6 +127,10 @@ export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: 
 
 function Metric({ label, value }: { label: string; value: string }) {
   return <div className="drawer-metric"><label>{label}</label><strong>{value}</strong></div>;
+}
+
+function SamplingNote({label,stats}:{label:string;stats:ProbeStats}){
+  return stats.skipped?<p className="source-meta">{label} 提前淘汰：实际探测 {stats.attempts} 次，跳过剩余 {stats.skipped} 次。</p>:null;
 }
 
 function CopyOption({ label, selected, onChange }: { label: string; selected: boolean; onChange: (value: boolean) => void }) {

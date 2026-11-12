@@ -74,6 +74,20 @@ describe("shared publication and H3 requirement",()=>{
     render(<RunWorkspace/>);
     expect(screen.getByLabelText("H3 检测数量")).toHaveTextContent("逻辑候选：0实际 IPv4：0累计下载：0.0 MiB");
   });
+  it.each(["running","completed"] as const)("counts skipped attempts as resolved work without reporting them as executed when %s",state=>{
+    const completed=state==="running"?2:3,skipped=completed*2;
+    const current={...getAppState(),settings:{...defaultSettings,requireH3:true},running:state==="running",progress:{runId:"early-stop",mode:"h3" as const,state,startedAt:new Date().toISOString(),stages:[{name:"quic",input:3,passed:0,failed:completed,attemptsCompleted:completed,attemptsSkipped:skipped,attemptsTotal:9,durationMs:2000,state}],failures:{quic_timeout:completed}}};
+    vi.spyOn(store,"useAppStore").mockImplementation(selector=>selector(current));
+    render(<RunWorkspace/>);
+    expect(Number(screen.getByRole("progressbar",{name:"QUIC进度"}).getAttribute("aria-valuenow"))).toBeCloseTo((completed+skipped)/9*100);
+    expect(screen.getByText(`提前跳过 ${skipped} 次`)).toBeInTheDocument();
+    expect(screen.getByLabelText("当前测速进度")).toHaveTextContent(`${completed} ${state==="running"?"/ 3 节点":"失败"}`);
+    if(state==="running"){
+      expect(screen.getByText("2 / 9 次探测 · 提前跳过 4 次")).toBeInTheDocument();
+      expect(screen.getByText("1 次/秒")).toBeInTheDocument();
+      expect(screen.getByText("1 秒")).toBeInTheDocument();
+    }
+  });
   it.each([undefined,"tcp_https"] as const)("shows new TCP progress over previous H3 results when mode is %s",mode=>{
     const previous={mode:"h3",logicalCandidates:99,physicalCandidates:199,downloadedBytes:999*1048576,runId:"previous",state:"completed",results:[],failures:{},publications:[],scoreWeights:defaultSettings.scoreWeights,reusedStages:[],startedAt:new Date().toISOString(),finishedAt:new Date().toISOString()} as RunSummary;
     const current={...getAppState(),settings:{...defaultSettings,requireH3:false},current:previous,running:true,progress:{runId:"new",mode,state:"running",startedAt:new Date().toISOString(),stages:[],failures:{}}};

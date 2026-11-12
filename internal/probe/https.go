@@ -23,6 +23,7 @@ var errRejectedRedirect = errors.New("下载测速重定向被拒绝")
 type HTTPSProber struct {
 	ConnectTimeout time.Duration
 	RequestTimeout time.Duration
+	MinSuccessRate float64
 	RootCAs        *x509.CertPool
 	Path           string
 }
@@ -35,7 +36,8 @@ func (p HTTPSProber) Probe(ctx context.Context, candidate model.Candidate, attem
 	if path == "" {
 		path = "/cdn-cgi/trace"
 	}
-	for index := 0; index < attempts; index++ {
+	completed, skipped := 0, 0
+	for completed < attempts && ctx.Err() == nil {
 		attemptCtx, cancel := context.WithTimeout(ctx, p.RequestTimeout)
 		started := time.Now()
 		req, _ := http.NewRequestWithContext(attemptCtx, http.MethodGet, "https://"+speedHost+path, nil)
@@ -43,30 +45,29 @@ func (p HTTPSProber) Probe(ctx context.Context, candidate model.Candidate, attem
 		resp, err := client.Do(req)
 		if err != nil {
 			failures[classify(attemptCtx, err)]++
-			cancel()
-			if onAttempt != nil {
-				onAttempt()
-			}
-			if ctx.Err() != nil {
-				break
-			}
-			continue
-		}
-		_, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 256*1024))
-		_ = resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			failures[model.FailureHTTPStatus]++
-		} else if readErr != nil {
-			failures[classify(attemptCtx, readErr)]++
 		} else {
-			samples = append(samples, float64(time.Since(started).Microseconds())/1000)
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				failures[model.FailureHTTPStatus]++
+			} else if _, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 256*1024)); readErr != nil {
+				failures[classify(attemptCtx, readErr)]++
+			} else {
+				samples = append(samples, float64(time.Since(started).Microseconds())/1000)
+			}
+			_ = resp.Body.Close()
 		}
 		cancel()
+		completed++
 		if onAttempt != nil {
 			onAttempt()
 		}
+		if ctx.Err() == nil && cannotReachSuccessRate(attempts, completed, len(samples), p.MinSuccessRate) {
+			skipped = attempts - completed
+			break
+		}
 	}
-	return Summarize(attempts, samples, failures)
+	stats := Summarize(completed, samples, failures)
+	stats.Skipped = skipped
+	return stats
 }
 
 func (p HTTPSProber) client(candidate model.Candidate) *http.Client {

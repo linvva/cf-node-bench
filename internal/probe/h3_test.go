@@ -63,8 +63,8 @@ func TestH3ProbesUseFixedIPAndVerifiedWorkerHost(t *testing.T) {
 		_, _ = w.Write(make([]byte, 256*1024))
 	}))
 	completed := 0
-	quicStats := (QUICProber{Timeout: time.Second, WorkerHost: h3TestHost, RootCAs: roots}).Probe(t.Context(), candidate, 3, func() { completed++ })
-	if quicStats.Successes != 3 || completed != 3 {
+	quicStats := (QUICProber{Timeout: time.Second, WorkerHost: h3TestHost, RootCAs: roots, MinSuccessRate: 2.0 / 3}).Probe(t.Context(), candidate, 3, func() { completed++ })
+	if quicStats.Successes != 3 || completed != 3 || quicStats.Attempts != 3 || quicStats.Skipped != 0 {
 		t.Fatalf("QUIC=%+v attempts=%d", quicStats, completed)
 	}
 	httpStats := (HTTP3Prober{ConnectTimeout: time.Second, RequestTimeout: time.Second, WorkerHost: h3TestHost, RootCAs: roots}).Probe(t.Context(), candidate, 3, nil)
@@ -125,12 +125,12 @@ func TestH3CannotFallbackToWorkingTCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer socket.Close()
-	stats := (HTTP3Prober{ConnectTimeout: 80 * time.Millisecond, RequestTimeout: time.Second, WorkerHost: h3TestHost}).Probe(t.Context(), candidate, 1, nil)
-	if stats.Failures[model.FailureQUICHandshakeTimeout] != 1 || tcpRequests.Load() != 0 {
+	stats := (HTTP3Prober{ConnectTimeout: 80 * time.Millisecond, RequestTimeout: time.Second, WorkerHost: h3TestHost, MinSuccessRate: 1}).Probe(t.Context(), candidate, 3, nil)
+	if stats.Failures[model.FailureQUICHandshakeTimeout] != 1 || stats.Attempts != 1 || stats.Skipped != 2 || tcpRequests.Load() != 0 {
 		t.Fatalf("stats=%+v TCP=%d", stats, tcpRequests.Load())
 	}
-	quicStats := (QUICProber{Timeout: 80 * time.Millisecond, WorkerHost: h3TestHost}).Probe(t.Context(), candidate, 1, nil)
-	if quicStats.Failures[model.FailureQUICHandshakeTimeout] != 1 {
+	quicStats := (QUICProber{Timeout: 80 * time.Millisecond, WorkerHost: h3TestHost, MinSuccessRate: 1}).Probe(t.Context(), candidate, 3, nil)
+	if quicStats.Failures[model.FailureQUICHandshakeTimeout] != 1 || quicStats.Attempts != 1 || quicStats.Skipped != 2 {
 		t.Fatalf("QUIC=%+v", quicStats)
 	}
 }
@@ -187,8 +187,8 @@ func TestH3CancellationClosesHandshakeAndDownload(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		go func() { time.Sleep(30 * time.Millisecond); cancel() }()
 		started := time.Now()
-		stats := (QUICProber{Timeout: time.Second, WorkerHost: h3TestHost}).Probe(ctx, candidateFor(t, socket.LocalAddr()), 3, nil)
-		if stats.Failures[model.FailureCancelled] != 1 || time.Since(started) > 500*time.Millisecond {
+		stats := (QUICProber{Timeout: time.Second, WorkerHost: h3TestHost, MinSuccessRate: 1}).Probe(ctx, candidateFor(t, socket.LocalAddr()), 3, nil)
+		if stats.Failures[model.FailureCancelled] != 1 || stats.Attempts != 1 || stats.Skipped != 0 || time.Since(started) > 500*time.Millisecond {
 			t.Fatalf("stats=%+v duration=%s", stats, time.Since(started))
 		}
 	})

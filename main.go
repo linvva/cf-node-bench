@@ -30,6 +30,7 @@ func main() {
 		AssetServer:      &assetserver.Options{Assets: assets},
 		BackgroundColour: &options.RGBA{R: 246, G: 247, B: 249, A: 1},
 		Windows:          &windows.Options{WebviewUserDataPath: filepath.Join(appDataDir, "WebView2")},
+		DragAndDrop:      &options.DragAndDrop{EnableFileDrop: true},
 		OnStartup:        app.startup,
 		Bind:             []interface{}{app},
 	})

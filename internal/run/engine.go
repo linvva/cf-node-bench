@@ -47,12 +47,17 @@ type stagePipeline struct {
 }
 
 type RunInput struct {
-	Sources  []source.HTTPSource
-	Retained []model.ProbeResult
-	Plan     RunPlan
+	LocalFiles *source.ParseResult
+	Sources    []source.HTTPSource
+	Retained   []model.ProbeResult
+	Plan       RunPlan
 }
 
 func (e Engine) Run(ctx context.Context, runID string, settings config.Settings, input RunInput, emit func(model.RunProgress)) model.RunSummary {
+	if input.LocalFiles != nil {
+		input.Sources = nil
+		input.Retained = nil
+	}
 	settings.AllowedPorts = slices.Clone(settings.AllowedPorts)
 	settings.AllowedCountries = slices.Clone(settings.AllowedCountries)
 	settings.BlockedCountries = slices.Clone(settings.BlockedCountries)
@@ -69,6 +74,10 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 		parentRunID = base.RunID
 	}
 	checkpoint := checkpointForRun(runID, parentRunID, settings, input.Sources, input.Plan.Network, startStage, base)
+	checkpoint.LocalFiles = checkpoint.LocalFiles || input.LocalFiles != nil
+	progress.mu.Lock()
+	progress.value.LocalFiles = checkpoint.LocalFiles
+	progress.mu.Unlock()
 	checkpointWarning := ""
 	pipeline := stagePipeline{ctx: ctx, dependencies: e.Dependencies, settings: settings, progress: progress}
 	persistCheckpoint := func() {
@@ -115,7 +124,7 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 	if startStage == StageSource {
 		var parseFailures map[model.FailureReason]int
 		var cancelled bool
-		candidates, parseFailures, cancelled = pipeline.source(input.Sources)
+		candidates, parseFailures, cancelled = pipeline.source(input.Sources, input.LocalFiles)
 		if cancelled {
 			return finish(nil, "cancelled")
 		}
@@ -201,7 +210,19 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 	return finish(results, "completed")
 }
 
-func (p stagePipeline) source(sources []source.HTTPSource) ([]model.Candidate, map[model.FailureReason]int, bool) {
+func (p stagePipeline) source(sources []source.HTTPSource, localFiles *source.ParseResult) ([]model.Candidate, map[model.FailureReason]int, bool) {
+	if localFiles != nil {
+		p.progress.start("source", 1)
+		failures := map[model.FailureReason]int{}
+		for _, failure := range localFiles.Failures {
+			failures[failure.Reason]++
+		}
+		if p.ctx.Err() != nil {
+			return nil, failures, true
+		}
+		p.progress.finish("source", 1, 1, 0)
+		return unique(append([]model.Candidate(nil), localFiles.Candidates...)), failures, false
+	}
 	enabled := countIf(sources, func(item source.HTTPSource) bool { return item.Enabled })
 	p.progress.start("source", enabled)
 	candidates := []model.Candidate{}
@@ -251,6 +272,7 @@ func (p stagePipeline) tcp(candidates []model.Candidate) []model.ProbeResult {
 	results := parallel(p.ctx, candidates, p.settings.ConnectionConcurrency, func(ctx context.Context, candidate model.Candidate) model.ProbeResult {
 		return model.ProbeResult{Candidate: candidate, TCP: p.dependencies.TCP.Probe(ctx, candidate, p.settings.ConnectionProbeCount, func() { p.progress.attempt("tcp") })}
 	}, func(result model.ProbeResult) {
+		p.progress.skipAttempts("tcp", result.TCP.Skipped)
 		passed := result.TCP.SuccessRate >= p.settings.ConnectionMinSuccessRate
 		p.progress.advance("tcp", passed, nodeFailure(passed, result.TCP.Failures, model.FailureTCP))
 	})
@@ -262,31 +284,21 @@ func (p stagePipeline) tcp(candidates []model.Candidate) []model.ProbeResult {
 }
 
 func (p stagePipeline) https(candidates []model.ProbeResult) []model.ProbeResult {
-	initialCount := min(p.settings.HTTPCandidateCount, len(candidates))
 	target := min(p.settings.HTTPCandidateCount, len(candidates))
-	p.progress.startProbe("https", initialCount, p.settings.HTTPProbeCount)
+	p.progress.startProbe("https", 0, 0)
 	started := time.Now()
-	results := make([]model.ProbeResult, 0, initialCount)
-	passed, next := 0, 0
-	for passed < target && next < len(candidates) && p.ctx.Err() == nil {
-		batchSize := initialCount
-		if next > 0 {
-			batchSize = min(target-passed, len(candidates)-next)
-			p.progress.extendProbe("https", batchSize, p.settings.HTTPProbeCount)
-		}
-		batch := candidates[next : next+batchSize]
-		next += batchSize
-		batchResults := parallel(p.ctx, batch, p.settings.HTTPConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
-			result.HTTPS = p.dependencies.HTTPS.Probe(ctx, result.Candidate, p.settings.HTTPProbeCount, func() { p.progress.attempt("https") })
-			return result
-		}, func(result model.ProbeResult) {
-			qualified := result.HTTPS.SuccessRate >= p.settings.HTTPMinSuccessRate
-			p.progress.advance("https", qualified, nodeFailure(qualified, result.HTTPS.Failures, model.FailureTLS))
-		})
-		results = append(results, batchResults...)
-		passed += countIf(batchResults, func(result model.ProbeResult) bool { return result.HTTPS.SuccessRate >= p.settings.HTTPMinSuccessRate })
-	}
-	p.progress.finishAt("https", next, passed, next-passed, started)
+	results := parallelUntil(p.ctx, candidates, p.settings.HTTPConcurrency, target, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
+		p.progress.extendProbe("https", 1, p.settings.HTTPProbeCount)
+		result.HTTPS = p.dependencies.HTTPS.Probe(ctx, result.Candidate, p.settings.HTTPProbeCount, func() { p.progress.attempt("https") })
+		return result
+	}, func(result model.ProbeResult) bool {
+		p.progress.skipAttempts("https", result.HTTPS.Skipped)
+		qualified := result.HTTPS.SuccessRate >= p.settings.HTTPMinSuccessRate
+		p.progress.advance("https", qualified, nodeFailure(qualified, result.HTTPS.Failures, model.FailureTLS))
+		return qualified
+	})
+	passed := countIf(results, func(result model.ProbeResult) bool { return result.HTTPS.SuccessRate >= p.settings.HTTPMinSuccessRate })
+	p.progress.finishAt("https", len(results), passed, len(results)-passed, started)
 	return results
 }
 
@@ -307,35 +319,26 @@ func (p stagePipeline) retained(candidates []model.ProbeResult) []model.ProbeRes
 
 func (p stagePipeline) bandwidth(retainedResults, freshResults []model.ProbeResult) []model.ProbeResult {
 	target := min(p.settings.BandwidthCandidates, len(freshResults))
-	p.progress.startProbe("bandwidth", len(retainedResults)+target, 1)
+	p.progress.startProbe("bandwidth", 0, 0)
 	started := time.Now()
-	probe := func(batch []model.ProbeResult) []model.ProbeResult {
-		return parallel(p.ctx, batch, p.settings.BandwidthConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
-			result.Bandwidth = p.dependencies.Bandwidth.Probe(ctx, result.Candidate)
-			p.progress.attempt("bandwidth")
-			return result
-		}, func(result model.ProbeResult) {
-			failures := map[model.FailureReason]int{}
-			if result.Bandwidth.Failure != "" {
-				failures[result.Bandwidth.Failure] = 1
-			}
-			p.progress.advance("bandwidth", bandwidthPassed(result), failures)
-		})
+	probe := func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
+		p.progress.extendProbe("bandwidth", 1, 1)
+		result.Bandwidth = p.dependencies.Bandwidth.Probe(ctx, result.Candidate)
+		p.progress.attempt("bandwidth")
+		return result
 	}
-	results := probe(retainedResults)
-	passed := countIf(results, bandwidthPassed)
-	freshPassed, next := 0, 0
-	for freshPassed < target && next < len(freshResults) && p.ctx.Err() == nil {
-		batchSize := min(target-freshPassed, len(freshResults)-next)
-		if next > 0 {
-			p.progress.extendProbe("bandwidth", batchSize, 1)
+	completed := func(result model.ProbeResult) bool {
+		failures := map[model.FailureReason]int{}
+		if result.Bandwidth.Failure != "" {
+			failures[result.Bandwidth.Failure] = 1
 		}
-		batchResults := probe(freshResults[next : next+batchSize])
-		next += batchSize
-		results = append(results, batchResults...)
-		freshPassed += countIf(batchResults, bandwidthPassed)
+		passed := bandwidthPassed(result)
+		p.progress.advance("bandwidth", passed, failures)
+		return passed
 	}
-	passed += freshPassed
+	results := parallel(p.ctx, retainedResults, p.settings.BandwidthConcurrency, probe, func(result model.ProbeResult) { completed(result) })
+	results = append(results, parallelUntil(p.ctx, freshResults, p.settings.BandwidthConcurrency, target, probe, completed)...)
+	passed := countIf(results, bandwidthPassed)
 	p.progress.finishAt("bandwidth", len(results), passed, len(results)-passed, started)
 	return results
 }
@@ -361,6 +364,7 @@ func checkpointForRun(runID, parentRunID string, settings config.Settings, sourc
 		return checkpoint
 	}
 	checkpoint.Sources = append([]source.HTTPSource(nil), base.Sources...)
+	checkpoint.LocalFiles = base.LocalFiles
 	checkpoint.Candidates = append([]model.Candidate(nil), base.Candidates...)
 	for _, name := range reusedStages(startStage) {
 		if _, completed := base.Stage(name); completed {
@@ -762,6 +766,29 @@ func (p *progressTracker) attempt(name string) {
 		p.send()
 	}
 }
+func (p *progressTracker) skipAttempts(name string, count int) {
+	if count == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.value.Stages {
+		if p.value.Stages[i].Name == name {
+			p.value.Stages[i].AttemptsSkipped += count
+			return
+		}
+	}
+}
+func (p *progressTracker) planAttempts(name string, count int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.value.Stages {
+		if p.value.Stages[i].Name == name {
+			p.value.Stages[i].AttemptsTotal += count
+			return
+		}
+	}
+}
 func (p *progressTracker) addFailures(failures map[model.FailureReason]int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -830,6 +857,7 @@ func (p *progressTracker) summary(started time.Time, results []model.ProbeResult
 		}
 	}
 	runID := p.value.RunID
+	localFiles := p.value.LocalFiles
 	checkpointWarning := p.value.CheckpointWarning
 	failures := map[model.FailureReason]int{}
 	for k, v := range p.value.Failures {
@@ -837,5 +865,5 @@ func (p *progressTracker) summary(started time.Time, results []model.ProbeResult
 	}
 	p.mu.Unlock()
 	p.send()
-	return model.RunSummary{RunID: runID, StartedAt: started, FinishedAt: time.Now(), State: state, Results: results, Failures: failures, CheckpointWarning: checkpointWarning}
+	return model.RunSummary{LocalFiles: localFiles, RunID: runID, StartedAt: started, FinishedAt: time.Now(), State: state, Results: results, Failures: failures, CheckpointWarning: checkpointWarning}
 }
