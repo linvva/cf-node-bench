@@ -131,6 +131,9 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 		var retainedKeys map[string]bool
 		var retainedFailures map[model.FailureReason]int
 		retainedResults, retainedKeys, retainedFailures = prepareRetained(input.Retained, candidates, settings)
+		for _, retained := range retainedResults {
+			checkpoint.RetainedKeys = append(checkpoint.RetainedKeys, retained.Candidate.Key())
+		}
 		freshCandidates := filter(append([]model.Candidate(nil), candidates...), func(candidate model.Candidate) bool { return !retainedKeys[candidate.Key()] })
 		checkpoint.Candidates = append([]model.Candidate(nil), candidates...)
 		for _, retained := range retainedResults {
@@ -169,6 +172,7 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 			return finish(nil, "cancelled")
 		}
 		checkpoint.HTTPSResults = append([]model.ProbeResult(nil), rawHTTPSResults...)
+		checkpoint.HTTPSelectionComplete = true
 		saveCheckpoint("https")
 		httpsResults = filterHTTPSResults(rawHTTPSResults, settings)
 
@@ -188,11 +192,19 @@ func (e Engine) Run(ctx context.Context, runID string, settings config.Settings,
 	} else {
 		progress.reuse(checkpointStage(base, "https", len(checkpoint.HTTPSResults)), completedTime(base, "https"))
 		progress.reuse(checkpointStage(base, "retained", 0), completedTime(base, "retained"))
-		httpsResults = filterHTTPSResults(append([]model.ProbeResult(nil), checkpoint.HTTPSResults...), settings)
+		for _, result := range filterHTTPSResults(append([]model.ProbeResult(nil), checkpoint.HTTPSResults...), settings) {
+			if slices.Contains(checkpoint.RetainedKeys, result.Candidate.Key()) {
+				retainedResults = append(retainedResults, result)
+			} else {
+				httpsResults = append(httpsResults, result)
+			}
+		}
 		persistCheckpoint()
 	}
 
 	if startStage != StageRanking {
+		httpsResults = httpsResults[:min(settings.HTTPCandidateCount, len(httpsResults))]
+		progress.selectCandidates(StageHTTPS, len(httpsResults))
 		results = pipeline.bandwidth(retainedResults, httpsResults)
 		if ctx.Err() != nil {
 			return finish(nil, "cancelled")
@@ -284,21 +296,21 @@ func (p stagePipeline) tcp(candidates []model.Candidate) []model.ProbeResult {
 }
 
 func (p stagePipeline) https(candidates []model.ProbeResult) []model.ProbeResult {
-	target := min(p.settings.HTTPCandidateCount, len(candidates))
-	p.progress.startProbe("https", 0, 0)
+	p.progress.startProbe("https", len(candidates), p.settings.HTTPProbeCount)
 	started := time.Now()
-	results := parallelUntil(p.ctx, candidates, p.settings.HTTPConcurrency, target, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
-		p.progress.extendProbe("https", 1, p.settings.HTTPProbeCount)
+	results := parallel(p.ctx, candidates, p.settings.HTTPConcurrency, func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
 		result.HTTPS = p.dependencies.HTTPS.Probe(ctx, result.Candidate, p.settings.HTTPProbeCount, func() { p.progress.attempt("https") })
 		return result
-	}, func(result model.ProbeResult) bool {
+	}, func(result model.ProbeResult) {
 		p.progress.skipAttempts("https", result.HTTPS.Skipped)
 		qualified := result.HTTPS.SuccessRate >= p.settings.HTTPMinSuccessRate
 		p.progress.advance("https", qualified, nodeFailure(qualified, result.HTTPS.Failures, model.FailureTLS))
-		return qualified
 	})
 	passed := countIf(results, func(result model.ProbeResult) bool { return result.HTTPS.SuccessRate >= p.settings.HTTPMinSuccessRate })
-	p.progress.finishAt("https", len(results), passed, len(results)-passed, started)
+	if p.ctx.Err() == nil {
+		p.progress.selectCandidates("https", min(passed, p.settings.HTTPCandidateCount))
+		p.progress.finishAt("https", len(results), passed, len(results)-passed, started)
+	}
 	return results
 }
 
@@ -318,8 +330,10 @@ func (p stagePipeline) retained(candidates []model.ProbeResult) []model.ProbeRes
 }
 
 func (p stagePipeline) bandwidth(retainedResults, freshResults []model.ProbeResult) []model.ProbeResult {
-	target := min(p.settings.BandwidthCandidates, len(freshResults))
+	target := p.settings.BandwidthCandidates
 	p.progress.startProbe("bandwidth", 0, 0)
+	planned := min(target, len(freshResults))
+	p.progress.downloadQueue("bandwidth", model.StageQueue{Pool: len(freshResults), Target: target, Planned: planned, Pending: planned})
 	started := time.Now()
 	probe := func(ctx context.Context, result model.ProbeResult) model.ProbeResult {
 		p.progress.extendProbe("bandwidth", 1, 1)
@@ -337,9 +351,13 @@ func (p stagePipeline) bandwidth(retainedResults, freshResults []model.ProbeResu
 		return passed
 	}
 	results := parallel(p.ctx, retainedResults, p.settings.BandwidthConcurrency, probe, func(result model.ProbeResult) { completed(result) })
-	results = append(results, parallelUntil(p.ctx, freshResults, p.settings.BandwidthConcurrency, target, probe, completed)...)
+	results = append(results, parallelUntil(p.ctx, freshResults, p.settings.BandwidthConcurrency, target, probe, completed, func(queue model.StageQueue) {
+		p.progress.downloadQueue("bandwidth", queue)
+	})...)
 	passed := countIf(results, bandwidthPassed)
-	p.progress.finishAt("bandwidth", len(results), passed, len(results)-passed, started)
+	if p.ctx.Err() == nil {
+		p.progress.finishAt("bandwidth", len(results), passed, len(results)-passed, started)
+	}
 	return results
 }
 
@@ -377,6 +395,8 @@ func checkpointForRun(runID, parentRunID string, settings config.Settings, sourc
 		checkpoint.TCPResults = append([]model.ProbeResult(nil), base.TCPResults...)
 	}
 	if startStage == StageBandwidth || startStage == StageRanking {
+		checkpoint.HTTPSelectionComplete = base.HTTPSelectionComplete
+		checkpoint.RetainedKeys = append([]string(nil), base.RetainedKeys...)
 		checkpoint.HTTPSResults = append([]model.ProbeResult(nil), base.HTTPSResults...)
 	}
 	if startStage == StageRanking {
@@ -704,6 +724,28 @@ func (p *progressTracker) extendProbe(name string, input, attemptsPerInput int) 
 		if p.value.Stages[i].Name == name {
 			p.value.Stages[i].Input += input
 			p.value.Stages[i].AttemptsTotal += input * attemptsPerInput
+			break
+		}
+	}
+	p.mu.Unlock()
+	p.send()
+}
+func (p *progressTracker) selectCandidates(name string, selected int) {
+	p.mu.Lock()
+	for i := range p.value.Stages {
+		if p.value.Stages[i].Name == name {
+			p.value.Stages[i].Selected = &selected
+			break
+		}
+	}
+	p.mu.Unlock()
+	p.send()
+}
+func (p *progressTracker) downloadQueue(name string, queue model.StageQueue) {
+	p.mu.Lock()
+	for i := range p.value.Stages {
+		if p.value.Stages[i].Name == name {
+			p.value.Stages[i].Queue = &queue
 			break
 		}
 	}

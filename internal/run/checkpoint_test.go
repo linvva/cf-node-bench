@@ -14,7 +14,8 @@ func TestBuildResumeInfoRequiresCurrentCompleteData(t *testing.T) {
 	settings := config.DefaultSettings()
 	now := time.Now()
 	checkpoint := Checkpoint{
-		RunID: "current", UpdatedAt: now, Settings: settings,
+		HTTPSelectionComplete: true,
+		RunID:                 "current", UpdatedAt: now, Settings: settings,
 		Candidates:       []model.Candidate{{IP: "1.1.1.1", Port: 443}},
 		TCPResults:       []model.ProbeResult{{Candidate: model.Candidate{IP: "1.1.1.1", Port: 443}}},
 		HTTPSResults:     []model.ProbeResult{{Candidate: model.Candidate{IP: "1.1.1.1", Port: 443}}},

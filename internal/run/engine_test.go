@@ -263,7 +263,8 @@ func TestRetainedResultsTakePriorityAndUseExtraBandwidthQuota(t *testing.T) {
 		Bandwidth: selectiveBandwidth{failed: map[string]bool{}, probed: &bandwidthCalls},
 	}}
 	var updates []model.RunProgress
-	summary := engine.Run(t.Context(), "retained-fast-path", settings, RunInput{Sources: []source.HTTPSource{{Enabled: true}}, Retained: retained}, func(progress model.RunProgress) {
+	var checkpoint Checkpoint
+	summary := engine.Run(t.Context(), "retained-fast-path", settings, RunInput{Sources: []source.HTTPSource{{Enabled: true}}, Retained: retained, Plan: RunPlan{Save: func(c Checkpoint) error { checkpoint = c; return nil }}}, func(progress model.RunProgress) {
 		updates = append(updates, progress)
 	})
 
@@ -309,6 +310,15 @@ func TestRetainedResultsTakePriorityAndUseExtraBandwidthQuota(t *testing.T) {
 	}
 	if len(summary.Results) != settings.FinalResultCount {
 		t.Fatalf("final result cap was not applied: %d", len(summary.Results))
+	}
+	bandwidthCalls = nil
+	httpsCalls = nil
+	updates = nil
+	settings.HTTPCandidateCount, settings.BandwidthCandidates, settings.FinalResultCount = 1, 1, 1
+	resumed := engine.Run(t.Context(), "retained-download", settings, RunInput{Plan: RunPlan{StartStage: StageBandwidth, Base: &checkpoint}}, func(p model.RunProgress) { updates = append(updates, p) })
+	bandwidthStage = completedStage(updates, StageBandwidth)
+	if resumed.StartStage != StageBandwidth || len(httpsCalls) != 0 || len(bandwidthCalls) != 3 || bandwidthStage.Queue == nil || bandwidthStage.Queue.Pool != 1 || bandwidthStage.Queue.Passed != 1 || bandwidthStage.Passed != 3 {
+		t.Fatalf("download resume consumed fresh quota for retained nodes: stage=%+v downloads=%v", bandwidthStage, bandwidthCalls)
 	}
 }
 
@@ -626,7 +636,8 @@ func reusableCheckpoint(settings config.Settings) Checkpoint {
 		})
 	}
 	return Checkpoint{
-		Version: CheckpointVersion, RunID: "base", UpdatedAt: now, Settings: settings, Candidates: candidates,
+		HTTPSelectionComplete: true,
+		Version:               CheckpointVersion, RunID: "base", UpdatedAt: now, Settings: settings, Candidates: candidates,
 		TCPResults: append([]model.ProbeResult(nil), results...), HTTPSResults: append([]model.ProbeResult(nil), results...), BandwidthResults: append([]model.ProbeResult(nil), results...),
 		Stages: []model.StageProgress{
 			{Name: "source", Input: 2, Passed: 2, State: "completed"}, {Name: "filter", Input: 2, Passed: 2, State: "completed"},

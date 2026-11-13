@@ -103,9 +103,9 @@ const mockDomain:Candidate={addressType:"domain",host:"edge.example.com",ip:"",p
 const h3MockCandidates=():Candidate[]=>mockData.sources.some(source=>source.enabled)?[mockDomain,...mockCandidates].filter(mockCandidateAllowed):[];
 function h3MockPlan():StageProgress[]{
   const s=currentMockSettings(); const n=h3MockCandidates().length;
-  const passed=Math.max(0,n-4), httpPassed=Math.min(passed,s.httpCandidateCount), bandwidth=Math.min(httpPassed,s.bandwidthCandidates), final=Math.min(bandwidth,s.finalResultCount);
-  const values:[string,number,number,number][]=[["source",mockData.sources.filter(source=>source.enabled).length,mockData.sources.filter(source=>source.enabled).length,0],["filter",n,n,0],["dns",n,n,0],["quic",n,passed,s.connectionProbeCount],["http3",httpPassed,httpPassed,s.httpProbeCount],["bandwidth",bandwidth,bandwidth,1],["ranking",bandwidth,final,0]];
-  const plan=values.map(([name,input,passed,attempts])=>({name,input,passed,failed:input-passed,attemptsCompleted:input*attempts,attemptsTotal:input*attempts,durationMs:input?850:0,state:"completed" as const}));
+  const passed=Math.max(0,n-4), selected=Math.min(passed,s.httpCandidateCount), bandwidth=Math.min(selected,s.bandwidthCandidates), final=Math.min(bandwidth,s.finalResultCount);
+  const values:[string,number,number,number][]=[["source",mockData.sources.filter(source=>source.enabled).length,mockData.sources.filter(source=>source.enabled).length,0],["filter",n,n,0],["dns",n,n,0],["quic",n,passed,s.connectionProbeCount],["http3",passed,passed,s.httpProbeCount],["bandwidth",bandwidth,bandwidth,1],["ranking",bandwidth,final,0]];
+  const plan:StageProgress[]=values.map(([name,input,passed,attempts])=>({name,input,passed,failed:input-passed,attemptsCompleted:input*attempts,attemptsTotal:input*attempts,durationMs:input?850:0,state:"completed" as const,...(name==="http3"?{selected}:{}),...(name==="bandwidth"?{queue:{pool:selected,target:s.bandwidthCandidates,planned:bandwidth,active:0,pending:0,passed:bandwidth}}:{})}));
   const start=startIndexFor(plan,mockStartStage);
   return plan.map((stage,index)=>index<start?{...stage,state:"reused" as const,measuredAt:mockData.resume.updatedAt}:stage);
 }
@@ -148,20 +148,21 @@ function mockPlan(): StageProgress[] {
   const portFailed=freshCandidates.length-portPassed.length;
   const countryFailed=portPassed.filter(candidate=>!mockCandidateAllowed(candidate)).length;
   const tcpFailed=Math.min(4,filtered.length); const tcpPassed=filtered.length-tcpFailed;
-  const httpsInitial=Math.min(tcpPassed,settings.httpCandidateCount); const httpsFailed=Math.min(2,httpsInitial);
-  const httpsInput=httpsInitial+Math.min(httpsFailed,Math.max(0,tcpPassed-httpsInitial)); const httpsPassed=httpsInput-httpsFailed;
+  const httpsInput=tcpPassed,httpsFailed=Math.min(2,httpsInput),httpsPassed=httpsInput-httpsFailed;
+  const selected=Math.min(httpsPassed,settings.httpCandidateCount);
   const seenRetained=new Set<string>();
   const retainedInput=retained.filter(result=>{const key=`${result.candidate.ip}:${result.candidate.port}`;if(seenRetained.has(key))return false;seenRetained.add(key);return mockCandidateAllowed(freshByKey.get(key)??result.candidate);}).length;
   const retainedFailed=Math.min(1,retainedInput); const retainedPassed=retainedInput-retainedFailed;
-  const bandwidthInput=Math.min(httpsPassed,settings.bandwidthCandidates)+retainedPassed; const bandwidthFailed=Math.min(1,bandwidthInput);
+  const target=settings.bandwidthCandidates,freshInput=Math.min(selected,target+1),bandwidthFailed=Math.min(1,freshInput);
+  const bandwidthInput=freshInput+retainedPassed;
   const rankingPassed=Math.min(bandwidthInput-bandwidthFailed,settings.finalResultCount);
   const plan:StageProgress[]=[
     {name:"source",input:mockData.sources.filter(source=>source.enabled).length,passed:mockData.sources.filter(source=>source.enabled).length,failed:0,durationMs:180,state:"completed"},
     {name:"filter",input:freshCandidates.length+2,passed:filtered.length,failed:2+portFailed+countryFailed,durationMs:24,state:"completed"},
     {name:"tcp",input:filtered.length,passed:tcpPassed,failed:tcpFailed,attemptsCompleted:filtered.length*settings.connectionProbeCount,attemptsTotal:filtered.length*settings.connectionProbeCount,durationMs:1480,state:"completed"},
-    {name:"https",input:httpsInput,passed:httpsPassed,failed:httpsFailed,attemptsCompleted:httpsInput*settings.httpProbeCount,attemptsTotal:httpsInput*settings.httpProbeCount,durationMs:1760,state:"completed"},
+    {name:"https",input:httpsInput,passed:httpsPassed,failed:httpsFailed,selected,attemptsCompleted:httpsInput*settings.httpProbeCount,attemptsTotal:httpsInput*settings.httpProbeCount,durationMs:1760,state:"completed"},
     {name:"retained",input:retainedInput,passed:retainedPassed,failed:retainedFailed,attemptsCompleted:retainedInput,attemptsTotal:retainedInput,durationMs:retainedInput?420:0,state:"completed"},
-    {name:"bandwidth",input:bandwidthInput,passed:bandwidthInput-bandwidthFailed,failed:bandwidthFailed,attemptsCompleted:bandwidthInput,attemptsTotal:bandwidthInput,durationMs:1930,state:"completed"},
+    {name:"bandwidth",input:bandwidthInput,passed:bandwidthInput-bandwidthFailed,failed:bandwidthFailed,queue:{pool:selected,target,planned:freshInput,active:0,pending:0,passed:freshInput-bandwidthFailed},attemptsCompleted:bandwidthInput,attemptsTotal:bandwidthInput,durationMs:1930,state:"completed"},
     {name:"ranking",input:bandwidthInput,passed:rankingPassed,failed:bandwidthInput-rankingPassed,durationMs:28,state:"completed"},
   ];
   const startIndex=startIndexFor(plan,mockStartStage);
@@ -174,8 +175,12 @@ function mockPlan(): StageProgress[] {
 
 function mockRunningStage(stage: StageProgress): StageProgress {
   const ratio=0.42;
+  const queue=stage.queue?{...stage.queue,passed:Math.floor(stage.queue.passed*ratio),active:Math.min(currentMockSettings().bandwidthConcurrency,Math.max(0,stage.queue.planned-Math.floor(stage.queue.passed*ratio)-Math.floor(stage.failed*ratio)))}:undefined;
+  if(queue)queue.pending=Math.max(0,queue.planned-queue.active-queue.passed-Math.floor(stage.failed*ratio));
   return {
     ...stage,
+    selected:undefined,
+    queue,
     passed:Math.floor(stage.passed*ratio),
     failed:Math.floor(stage.failed*ratio),
     attemptsCompleted:stage.attemptsTotal?Math.max(1,Math.floor(stage.attemptsTotal*ratio)):undefined,

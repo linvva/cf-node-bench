@@ -63,11 +63,13 @@ function RunProgressPanels(){
   const title=isRunning?`${active.activity}进行中`:runState==="completed"?"最近测速已完成":runState==="cancelled"?"测速已取消":"等待开始测速";
   const failureEntries=Object.entries(failures).filter(([,count])=>count).sort((left,right)=>right[1]-left[1]);
   const failureTotal=failureEntries.reduce((total,[,count])=>total+count,0); const failureMax=failureEntries[0]?.[1]||1;
+  const httpStage=stageValue(isH3?"http3":"https");
+  const downloadStage=stageValue("bandwidth"),queue=downloadStage?.queue;
   const freshPath=[
     {label:"解析输入",value:stageValue("filter")?.input},
     {label:"过滤后",value:stageValues[1].current?.passed},
     {label:isH3?"QUIC 通过":"TCP 通过",value:stageValue(isH3?"quic":"tcp")?.passed},
-    {label:isH3?"HTTP/3 通过":"HTTPS 通过",value:stageValue(isH3?"http3":"https")?.passed},
+    {label:httpStage?.selected===undefined?(isH3?"HTTP/3 通过":"HTTPS 通过"):(isH3?"新节点入选":"HTTPS 入选"),value:httpStage?.selected??httpStage?.passed},
   ];
   const retainedPath=[
     {label:"复检输入",value:stageValue("retained")?.input},
@@ -82,7 +84,7 @@ function RunProgressPanels(){
       <div className="active-stage-summary">
         <div className="active-stage-title"><span><Gauge size={18}/></span><div><small>{isRunning?`阶段 ${activeIndex+1} / ${stages.length}`:"运行状态"}</small><h2>{title}</h2><p>{isRunning?metrics.detail:runState==="completed"?`${summary?.results.length??0} 个节点进入最终结果`:runState==="cancelled"?"保留上一次已完成的测速结果":"准备好后可开始新的网络测量"}</p></div></div>
         <div className="active-stage-metrics">
-          <span><small>阶段进度</small><strong>{Math.round(metrics.percent)}%</strong></span>
+          <span><small>{active.current?.queue?"目标进度":"阶段进度"}</small><strong>{Math.round(metrics.percent)}%</strong></span>
           <span><small>处理速率</small><strong>{isRunning&&metrics.rate>0?`${formatRate(metrics.rate)} ${metrics.rateUnit}`:"-"}</strong></span>
           <span><small>已用时间</small><strong>{metrics.durationMs?formatDuration(metrics.durationMs):"-"}</strong></span>
           <span><small>预计剩余</small><strong>{isRunning?metrics.eta:"-"}</strong></span>
@@ -90,8 +92,9 @@ function RunProgressPanels(){
         <ProgressBar className="active-stage-progress" aria-label={`${active.label}进度`} value={metrics.percent} size="sm"><ProgressBar.Track><ProgressBar.Fill/></ProgressBar.Track></ProgressBar>
       </div>
       <section className="stage-list" aria-label="测速阶段">
-        {stageValues.map((stage,index)=>{const current=stage.current; const state=current?.state||"pending"; const attempts=current?.attemptsTotal?`探测 ${formatCount(current.attemptsCompleted??0)} / ${formatCount(current.attemptsTotal)}`:""; const skipped=current?.attemptsSkipped?`提前跳过 ${formatCount(current.attemptsSkipped)} 次`:""; const processed=(current?.passed??0)+(current?.failed??0); const detail=state==="pending"?"等待执行":state==="running"?`${formatCount(processed)} / ${formatCount(current?.input??0)} 节点`:state==="reused"?`${formatCount(current?.passed??0)} 通过 · 已复用`:state==="skipped"?"本轮不适用":state==="cancelled"?"已取消 · 采样未保留":`${formatCount(current?.passed??0)} 通过 · ${formatCount(current?.failed??0)} 失败`; const timing=state==="running"?[attempts,formatDuration(current?.durationMs??0)].filter(Boolean).join(" · "):state==="reused"?formatMeasuredAt(current?.measuredAt):state==="skipped"?"":current?formatDuration(current.durationMs):""; return <div className="stage" data-state={state} key={stage.id}><span className="stage-node">{state==="completed"?<Check size={13}/>:state==="running"?<Activity size={13}/>:state==="reused"?<RefreshCw size={12}/>:state==="skipped"?<Minus size={12}/>:state==="cancelled"?<X size={12}/>:index+1}</span><div className="stage-copy"><strong>{stage.label}</strong><small>{detail}</small>{skipped&&<small>{skipped}</small>}<div className="stage-time" title={attempts}>{timing}</div></div></div>})}
+        {stageValues.map((stage,index)=>{const current=stage.current; const state=current?.state||"pending"; const attempts=current?.queue?`已完成 ${formatCount(current.passed+current.failed)} 节点`:current?.attemptsTotal?`探测 ${formatCount(current.attemptsCompleted??0)} / ${formatCount(current.attemptsTotal)}`:""; const skipped=current?.attemptsSkipped?`提前跳过 ${formatCount(current.attemptsSkipped)} 次`:""; const processed=(current?.passed??0)+(current?.failed??0); const detail=state==="pending"?"等待执行":state==="running"?(current?.queue?`新节点通过 ${formatCount(current.queue.passed)} / ${formatCount(current.queue.target)}`:`${formatCount(processed)} / ${formatCount(current?.input??0)} 节点`):state==="reused"?`${formatCount(current?.passed??0)} 通过 · 已复用`:state==="skipped"?"本轮不适用":state==="cancelled"?"已取消 · 采样未保留":`${formatCount(current?.passed??0)} 通过 · ${formatCount(current?.failed??0)} 失败${current?.selected===undefined?"":` · 入选 ${formatCount(current.selected)}`}`; const timing=state==="running"?[attempts,formatDuration(current?.durationMs??0)].filter(Boolean).join(" · "):state==="reused"?formatMeasuredAt(current?.measuredAt):state==="skipped"?"":current?formatDuration(current.durationMs):""; return <div className="stage" data-state={state} key={stage.id}><span className="stage-node">{state==="completed"?<Check size={13}/>:state==="running"?<Activity size={13}/>:state==="reused"?<RefreshCw size={12}/>:state==="skipped"?<Minus size={12}/>:state==="cancelled"?<X size={12}/>:index+1}</span><div className="stage-copy"><strong>{stage.label}</strong><small title={detail}>{detail}</small>{skipped&&<small>{skipped}</small>}<div className="stage-time" title={attempts}>{timing}</div></div></div>})}
       </section>
+      {queue&&<div className="download-queue-stats" aria-label="带宽新节点队列"><span>新节点候选池：{formatCount(queue.pool)}</span><span>累计安排：{formatCount(queue.planned)}</span><span>待测：{formatCount(queue.pending)}</span><span>在测：{formatCount(queue.active)}</span><span>新节点通过：{formatCount(queue.passed)} / {formatCount(queue.target)}</span><span>本阶段已完成：{formatCount((downloadStage?.passed??0)+(downloadStage?.failed??0))}（含保留复测）</span>{(downloadStage?.state==="completed"||downloadStage?.state==="reused")&&queue.passed<queue.target&&<span>候选已耗尽，未达到目标</span>}</div>}
       {isH3&&<div className="h3-progress-stats" aria-label="H3 检测数量"><span>逻辑候选：{formatCount((progress?(progress.logicalCandidates??0):(summary?.logicalCandidates??0)))}</span><span>实际 IPv4：{formatCount((progress?(progress.physicalCandidates??0):(summary?.physicalCandidates??0)))}</span><span>累计下载：{(((progress?(progress.downloadedBytes??0):(summary?.downloadedBytes??0)))/1048576).toFixed(1)} MiB</span></div>}
       {checkpointWarning&&<div className="checkpoint-save-warning" role="status"><AlertTriangle size={14}/>{checkpointWarning}</div>}
     </section>
@@ -107,6 +110,13 @@ function CandidateLane({label,items}:{label:string;items:{label:string;value?:nu
 }
 
 function stageActivity(stage?:StageProgress){
+  if(stage?.queue){
+    const queue=stage.queue,completed=stage.passed+stage.failed,durationMs=stage.durationMs;
+    const percent=queue.target?Math.min(100,queue.passed/queue.target*100):100;
+    const detail=`新节点通过 ${formatCount(queue.passed)} / ${formatCount(queue.target)} · 在测 ${formatCount(queue.active)} · 待测 ${formatCount(queue.pending)}`;
+    const eta=queue.passed>=queue.target?(queue.active?"等待在测完成":"已达目标"):(stage.state==="completed"||stage.state==="reused"?"候选已耗尽":"动态补测");
+    return {percent,durationMs,rate:durationMs?completed/(durationMs/1000):0,eta,rateUnit:"节点/秒",detail};
+  }
   const attempts=stage?.attemptsTotal??0; const total=attempts||stage?.input||0;
   const completed=attempts?(stage?.attemptsCompleted??0):(stage?.passed??0)+(stage?.failed??0);
   const skipped=attempts?(stage?.attemptsSkipped??0):0; const processed=completed+skipped;

@@ -139,16 +139,28 @@ type EndpointResult struct {
 }
 
 type StageProgress struct {
-	Name              string    `json:"name"`
-	Input             int       `json:"input"`
-	Passed            int       `json:"passed"`
-	Failed            int       `json:"failed"`
-	AttemptsCompleted int       `json:"attemptsCompleted,omitempty"`
-	AttemptsSkipped   int       `json:"attemptsSkipped,omitempty"`
-	AttemptsTotal     int       `json:"attemptsTotal,omitempty"`
-	DurationMS        int64     `json:"durationMs"`
-	State             string    `json:"state"`
-	MeasuredAt        time.Time `json:"measuredAt,omitempty"`
+	Selected          *int        `json:"selected,omitempty"`
+	Queue             *StageQueue `json:"queue,omitempty"`
+	Name              string      `json:"name"`
+	Input             int         `json:"input"`
+	Passed            int         `json:"passed"`
+	Failed            int         `json:"failed"`
+	AttemptsCompleted int         `json:"attemptsCompleted,omitempty"`
+	AttemptsSkipped   int         `json:"attemptsSkipped,omitempty"`
+	AttemptsTotal     int         `json:"attemptsTotal,omitempty"`
+	DurationMS        int64       `json:"durationMs"`
+	State             string      `json:"state"`
+	MeasuredAt        time.Time   `json:"measuredAt,omitempty"`
+}
+
+// StageQueue describes fresh logical candidates; retained nodes are measured separately.
+type StageQueue struct {
+	Pool    int `json:"pool"`
+	Target  int `json:"target"`
+	Planned int `json:"planned"`
+	Active  int `json:"active"`
+	Pending int `json:"pending"`
+	Passed  int `json:"passed"`
 }
 
 type RunProgress struct {

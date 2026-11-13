@@ -9,7 +9,8 @@ export interface ScoreWeights { connection?: number; http?: number; tcp?: number
 export interface EndpointResult { ip: string; quic: ProbeStats; http3: ProbeStats; bandwidth: BandwidthStats }
 export interface ProbeResult { mode?: Mode; quic?: ProbeStats; http3?: ProbeStats; resolvedAt?: string; endpoints?: EndpointResult[]; candidate: Candidate; tcp: ProbeStats; https: ProbeStats; bandwidth: BandwidthStats; score: number; parts: ScoreParts; status: string }
 export type StageState = "pending" | "running" | "completed" | "reused" | "skipped" | "cancelled";
-export interface StageProgress { name: string; input: number; passed: number; failed: number; attemptsCompleted?: number; attemptsSkipped?: number; attemptsTotal?: number; durationMs: number; state: StageState; measuredAt?: string }
+export interface StageQueue { pool: number; target: number; planned: number; active: number; pending: number; passed: number }
+export interface StageProgress { name: string; input: number; passed: number; failed: number; selected?: number; queue?: StageQueue; attemptsCompleted?: number; attemptsSkipped?: number; attemptsTotal?: number; durationMs: number; state: StageState; measuredAt?: string }
 export interface RunProgress { localFiles?: boolean; mode?: Mode; logicalCandidates?: number; physicalCandidates?: number; downloadedBytes?: number; runId: string; state: string; startedAt: string; stages: StageProgress[]; failures: Partial<Record<FailureReason, number>>; message?: string; checkpointWarning?: string }
 export type PublishTarget = "cloudflare" | "github" | "gist" | "telegram";
 export type PublishCredentialTarget = PublishTarget | "telegramRelay";

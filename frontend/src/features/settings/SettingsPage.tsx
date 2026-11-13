@@ -43,10 +43,11 @@ export function SettingsPage() {
           <Field label={`${httpLabel} 并发`} value={form.httpConcurrency} min={1} max={64} onChange={(value) => number("httpConcurrency", value)} />
           <Field label="带宽并发" value={form.bandwidthConcurrency} min={1} max={10} onChange={(value) => number("bandwidthConcurrency", value)} />
         </SettingsSection>
-        <SettingsSection title="候选池与过滤" description="空白过滤列表表示不限；排除国家的优先级高于允许国家。">
+        <SettingsSection title="候选池与过滤" description="连接合格的节点全部完成 HTTP 检测，再按成功率、P95 延迟选出候选池。">
           <Field label="HTTP 候选池" value={form.httpCandidateCount} min={1} max={5000} onChange={(value) => number("httpCandidateCount", value)} />
           <Field label="带宽目标通过数" value={form.bandwidthCandidates} min={1} max={500} onChange={(value) => number("bandwidthCandidates", value)} />
           <Field label="最终结果数" value={form.finalResultCount} min={1} max={100} onChange={(value) => number("finalResultCount", value)} />
+          <div className="field field-wide"><small>带宽按目标数量首次排队，再按通过率批量补测；达到目标后等待在测任务完成，可能略超目标。空白过滤列表表示不限，排除国家优先。</small></div>
           <div className="field field-wide"><label>允许端口</label><Input aria-label="允许端口" value={form.allowedPorts.join(", ")} onChange={(event) => setForm((current) => ({ ...current, allowedPorts: event.target.value.split(/[,\s]+/).filter(Boolean).map(Number) }))} /><small>逗号分隔；留空表示不限</small></div>
           <CountryPicker label="允许国家" value={form.allowedCountries} description="留空表示不限；支持按中文名称或代码搜索" onChange={(value) => setForm((current) => ({ ...current, allowedCountries: value }))} />
           <CountryPicker label="排除国家" value={form.blockedCountries} description={`仅匹配数据源提供的国家标签；命中后在 ${connectionLabel} 前排除并显示数量`} onChange={(value) => setForm((current) => ({ ...current, blockedCountries: value }))} />

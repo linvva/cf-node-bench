@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ func (f downloadProbeFunc) Probe(ctx context.Context, c model.Candidate) model.B
 	return f(ctx, c)
 }
 
-func TestRollingStagesReplaceFailureBeforeSlowCandidateFinishes(t *testing.T) {
+func TestStagesKeepWorkingWhileOneCandidateIsSlow(t *testing.T) {
 	for _, stage := range []string{StageHTTPS, StageHTTP3, "tcp_download", "h3_download"} {
 		t.Run(stage, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
@@ -83,18 +84,15 @@ func TestRollingStagesReplaceFailureBeforeSlowCandidateFinishes(t *testing.T) {
 				}
 			}()
 			seen := map[string]bool{}
-			for len(seen) < 3 {
+			for len(seen) < 4 {
 				select {
 				case ip := <-started:
 					seen[ip] = true
 				case <-time.After(2 * time.Second):
 					cancel()
 					<-done
-					t.Fatal("failed candidate was not replaced while the slow candidate was still running")
+					t.Fatal("stage stopped filling workers while a slow candidate was still running")
 				}
-			}
-			if seen["192.0.2.4"] {
-				t.Fatal("started more candidates than needed")
 			}
 			close(release)
 			select {
@@ -103,15 +101,16 @@ func TestRollingStagesReplaceFailureBeforeSlowCandidateFinishes(t *testing.T) {
 				for _, result := range results {
 					ips = append(ips, result.Candidate.IP)
 				}
-				if !reflect.DeepEqual(ips, []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"}) {
-					t.Fatalf("candidate order or target changed: %v", ips)
+				slices.Sort(ips)
+				if !reflect.DeepEqual(ips, []string{"192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4"}) {
+					t.Fatalf("lost measurements: %v", ips)
 				}
 			case <-time.After(2 * time.Second):
 				t.Fatal("stage did not stop after reaching its success target")
 			}
 			stages := progress.snapshot()
 			current := stages[len(stages)-1]
-			if current.Passed != 2 || current.Failed != 1 || current.Input != 3 || current.AttemptsCompleted != current.AttemptsTotal || len(started) != 0 {
+			if current.Passed != 3 || current.Failed != 1 || current.Input != 4 || current.AttemptsCompleted != current.AttemptsTotal || len(started) != 0 {
 				t.Fatalf("unexpected work or progress: %+v", current)
 			}
 		})
@@ -128,7 +127,7 @@ func TestRollingCancellationDrainsInflightWithoutStartingMore(t *testing.T) {
 			started <- value
 			<-ctx.Done()
 			return value
-		}, func(int) bool { return false })
+		}, func(int) bool { return false }, nil)
 	}()
 	for range 2 {
 		select {

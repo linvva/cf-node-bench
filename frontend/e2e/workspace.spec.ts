@@ -1,6 +1,30 @@
 import { expect, test } from "@playwright/test";
 import type { RunProgress } from "../src/types";
 
+for(const mode of ["tcp_https","h3"] as const)test(`HTTP selection and download queues remain clear in ${mode}`,async({page},testInfo)=>{
+  await page.addInitScript(()=>{
+    window.runtime={EventsOn:(name,handler)=>{
+      if(name==="run:progress")(window as typeof window&{__queueProgress?:(value:RunProgress)=>void}).__queueProgress=handler;
+      return ()=>{};
+    }};
+  });
+  await page.goto("/");
+  await expect(page.getByRole("heading",{name:"测速工作台"})).toBeVisible();
+  await page.evaluate(mode=>{
+    (window as typeof window&{__queueProgress?:(value:RunProgress)=>void}).__queueProgress?.({runId:"queue",mode,state:"running",startedAt:new Date().toISOString(),stages:[
+      {name:mode==="h3"?"http3":"https",input:500,passed:350,failed:150,selected:200,durationMs:5000,state:"completed"},
+      {name:"bandwidth",input:33,passed:18,failed:12,attemptsCompleted:30,attemptsTotal:33,durationMs:10000,state:"running",queue:{pool:200,target:30,planned:50,active:3,pending:17,passed:18}},
+    ],failures:{}});
+  },mode);
+  const queue=page.getByLabel("带宽新节点队列");
+  await expect(queue).toContainText("新节点候选池：200累计安排：50待测：17在测：3新节点通过：18 / 30");
+  await expect(page.getByRole("progressbar",{name:"带宽进度"})).toHaveAttribute("aria-valuenow","60");
+  await expect(page.getByLabel("候选路径")).toContainText(`200${mode==="h3"?"新节点入选":"HTTPS 入选"}`);
+  await expect(page.getByText("动态补测",{exact:true})).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath("download-queue.png")});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBe(0);
+});
+
 test("early failed probes show skipped work without inflating executed attempts",async({page},testInfo)=>{
   await page.addInitScript(()=>{
     window.runtime={EventsOn:(name,handler)=>{

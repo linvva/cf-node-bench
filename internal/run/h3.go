@@ -80,6 +80,7 @@ func (e Engine) runH3(ctx context.Context, id string, settings config.Settings, 
 		}
 		if reuseUntil > slices.Index(order, StageHTTP3) {
 			checkpoint.HTTP3Results = cloneH3Results(base.HTTP3Results)
+			checkpoint.HTTPSelectionComplete = base.HTTPSelectionComplete
 		}
 		if stage == StageRanking {
 			checkpoint.BandwidthResults = cloneH3Results(base.BandwidthResults)
@@ -172,13 +173,13 @@ func (e Engine) runH3(ctx context.Context, id string, settings config.Settings, 
 			return finish(nil, "cancelled")
 		}
 		checkpoint.HTTP3Results = cloneH3Results(groups)
+		checkpoint.HTTPSelectionComplete = true
 		save(StageHTTP3)
 	} else {
 		groups = cloneH3Results(checkpoint.HTTP3Results)
 	}
 	if stage != StageRanking {
-		groups = p.eligible(groups, StageHTTP3)
-		slices.SortStableFunc(groups, func(a, b model.ProbeResult) int { return compareNumber(a.HTTP3.P95MS, b.HTTP3.P95MS) })
+		groups = p.httpCandidates(groups)
 		groups = p.selectStage(StageBandwidth, groups, settings.BandwidthCandidates)
 		if ctx.Err() != nil {
 			return finish(nil, "cancelled")
@@ -303,15 +304,51 @@ func (p *h3Pipeline) probeBatch(stage string, groups []model.ProbeResult) []mode
 	cache := p.cache[stage]
 	p.cacheMu.Unlock()
 	p.progress.extendProbe(stage, len(groups), 0)
-	// QUIC scans the full pool once; include queued IPs in its progress and ETA.
-	if stage == StageQUIC {
+	// Connection and HTTP stages scan their complete pools once.
+	if stage == StageQUIC || stage == StageHTTP3 {
 		p.progress.planAttempts(stage, len(todo)*attempts)
 	}
 	type measurement struct {
 		key      string
 		endpoint model.EndpointResult
 	}
-	measured := parallel(p.ctx, todo, concurrency, func(ctx context.Context, c model.Candidate) measurement {
+	type endpointLocation struct{ group, endpoint int }
+	output := cloneH3Results(groups)
+	locations := map[string][]endpointLocation{}
+	pending := make([]int, len(output))
+	complete := func(r *model.ProbeResult) {
+		aggregateH3(r)
+		passed := p.passed(*r, stage)
+		failures := map[model.FailureReason]int{}
+		if !passed {
+			switch stage {
+			case StageQUIC:
+				failures = nodeFailure(false, r.QUIC.Failures, model.FailureQUIC)
+			case StageHTTP3:
+				failures = nodeFailure(false, r.HTTP3.Failures, model.FailureProtocol)
+			default:
+				reason := r.Bandwidth.Failure
+				if reason == "" {
+					reason = model.FailureDownload
+				}
+				failures[reason] = 1
+			}
+		}
+		p.progress.advance(stage, passed, failures)
+	}
+	for i := range output {
+		r := &output[i]
+		pending[i] = len(r.Endpoints)
+		if pending[i] == 0 {
+			complete(r)
+		}
+		for j, ep := range r.Endpoints {
+			key := (model.Candidate{IP: ep.IP, Port: r.Candidate.Port}).Key()
+			locations[key] = append(locations[key], endpointLocation{i, j})
+		}
+	}
+	var aggregationMu sync.Mutex
+	parallel(p.ctx, todo, concurrency, func(ctx context.Context, c model.Candidate) measurement {
 		cache.mu.Lock()
 		if cached, ok := cache.results[c.Key()]; ok {
 			cache.mu.Unlock()
@@ -322,7 +359,7 @@ func (p *h3Pipeline) probeBatch(stage string, groups []model.ProbeResult) []mode
 		cache.results[c.Key()] = cached
 		cache.mu.Unlock()
 		defer close(cached.done)
-		if stage != StageQUIC {
+		if stage == StageBandwidth {
 			p.progress.planAttempts(stage, attempts)
 		}
 		ep := model.EndpointResult{IP: c.IP}
@@ -350,50 +387,40 @@ func (p *h3Pipeline) probeBatch(stage string, groups []model.ProbeResult) []mode
 		}
 		cached.endpoint = ep
 		return measurement{c.Key(), ep}
-	}, nil)
-	cached := make(map[string]model.EndpointResult, len(measured))
-	for _, value := range measured {
-		cached[value.key] = value.endpoint
-	}
-	output := cloneH3Results(groups)
-	for i := range output {
-		r := &output[i]
-		for j := range r.Endpoints {
-			ep := &r.Endpoints[j]
-			value := cached[(model.Candidate{IP: ep.IP, Port: r.Candidate.Port}).Key()]
+	}, func(value measurement) {
+		aggregationMu.Lock()
+		defer aggregationMu.Unlock()
+		for _, location := range locations[value.key] {
+			r := &output[location.group]
+			ep := &r.Endpoints[location.endpoint]
 			switch stage {
 			case StageQUIC:
-				ep.QUIC = value.QUIC
+				ep.QUIC = value.endpoint.QUIC
 			case StageHTTP3:
-				ep.HTTP3 = value.HTTP3
+				ep.HTTP3 = value.endpoint.HTTP3
 			case StageBandwidth:
-				ep.Bandwidth = value.Bandwidth
+				ep.Bandwidth = value.endpoint.Bandwidth
+			}
+			pending[location.group]--
+			if pending[location.group] == 0 {
+				complete(r)
 			}
 		}
-		aggregateH3(r)
-		passed := p.passed(*r, stage)
-		failures := map[model.FailureReason]int{}
-		if !passed {
-			switch stage {
-			case StageQUIC:
-				failures = nodeFailure(false, r.QUIC.Failures, model.FailureQUIC)
-			case StageHTTP3:
-				failures = nodeFailure(false, r.HTTP3.Failures, model.FailureProtocol)
-			default:
-				reason := r.Bandwidth.Failure
-				if reason == "" {
-					reason = model.FailureDownload
-				}
-				failures[reason] = 1
-			}
-		}
-		p.progress.advance(stage, passed, failures)
-	}
+	})
 	return output
 }
 
 func (p *h3Pipeline) selectStage(stage string, groups []model.ProbeResult, target int) []model.ProbeResult {
 	p.progress.start(stage, 0)
+	if stage == StageHTTP3 {
+		results := p.probeBatch(stage, groups)
+		p.finishStage(stage, results)
+		selected := countIf(results, func(r model.ProbeResult) bool {
+			return !p.retained[r.Candidate.Key()] && p.passed(r, stage)
+		})
+		p.progress.selectCandidates(stage, min(target, selected))
+		return results
+	}
 	retained, fresh := []model.ProbeResult{}, []model.ProbeResult{}
 	for _, r := range groups {
 		if p.retained[r.Candidate.Key()] {
@@ -402,16 +429,39 @@ func (p *h3Pipeline) selectStage(stage string, groups []model.ProbeResult, targe
 			fresh = append(fresh, r)
 		}
 	}
+	planned := min(target, len(fresh))
+	p.progress.downloadQueue(stage, model.StageQueue{Pool: len(fresh), Target: target, Planned: planned, Pending: planned})
 	results := p.probeBatch(stage, retained)
-	concurrency := p.settings.HTTPConcurrency
-	if stage == StageBandwidth {
-		concurrency = p.settings.BandwidthConcurrency
-	}
-	results = append(results, parallelUntil(p.ctx, fresh, concurrency, target, func(_ context.Context, group model.ProbeResult) model.ProbeResult {
+	results = append(results, parallelUntil(p.ctx, fresh, p.settings.BandwidthConcurrency, target, func(_ context.Context, group model.ProbeResult) model.ProbeResult {
 		return p.probeBatch(stage, []model.ProbeResult{group})[0]
-	}, func(group model.ProbeResult) bool { return p.passed(group, stage) })...)
+	}, func(group model.ProbeResult) bool { return p.passed(group, stage) }, func(queue model.StageQueue) {
+		p.progress.downloadQueue(stage, queue)
+	})...)
 	p.finishStage(stage, results)
 	return results
+}
+
+func (p *h3Pipeline) httpCandidates(groups []model.ProbeResult) []model.ProbeResult {
+	groups = p.eligible(groups, StageHTTP3)
+	slices.SortStableFunc(groups, func(a, b model.ProbeResult) int {
+		if rate := compareNumber(b.HTTP3.SuccessRate, a.HTTP3.SuccessRate); rate != 0 {
+			return rate
+		}
+		return compareNumber(a.HTTP3.P95MS, b.HTTP3.P95MS)
+	})
+	selected := 0
+	groups = filter(groups, func(r model.ProbeResult) bool {
+		if p.retained[r.Candidate.Key()] {
+			return true
+		}
+		if selected == p.settings.HTTPCandidateCount {
+			return false
+		}
+		selected++
+		return true
+	})
+	p.progress.selectCandidates(StageHTTP3, selected)
+	return groups
 }
 
 func (p *h3Pipeline) finishStage(stage string, groups []model.ProbeResult) {

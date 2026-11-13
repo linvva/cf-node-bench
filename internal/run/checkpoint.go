@@ -59,6 +59,10 @@ func BuildResumeInfo(checkpoint Checkpoint, currentRunID string, settings config
 			option.Available = false
 			option.Warnings = append(option.Warnings, earlyStoppedRestartWarning(restart))
 		}
+		if restart := incompleteHTTPRestartStage(checkpoint, settings, definition.stage); option.Available && restart != "" {
+			option.Available = false
+			option.Warnings = append(option.Warnings, incompleteHTTPRestartWarning(restart))
+		}
 		if option.Available {
 			option.Warnings = append(option.Warnings, checkpointWarnings(checkpoint, definition.stage, settings, sources, network, now)...)
 		}
@@ -154,25 +158,26 @@ func sameEnabledSources(left, right []source.HTTPSource) bool {
 }
 
 type Checkpoint struct {
-	LocalFiles       bool                       `json:"localFiles,omitempty"`
-	QUICResults      []model.ProbeResult        `json:"quicResults,omitempty"`
-	HTTP3Results     []model.ProbeResult        `json:"http3Results,omitempty"`
-	RetainedKeys     []string                   `json:"retainedKeys,omitempty"`
-	Version          int                        `json:"version"`
-	RunID            string                     `json:"runId"`
-	ParentRunID      string                     `json:"parentRunId,omitempty"`
-	UpdatedAt        time.Time                  `json:"updatedAt"`
-	Network          NetworkSnapshot            `json:"network"`
-	Settings         config.Settings            `json:"settings"`
-	StageSettings    map[string]config.Settings `json:"stageSettings"`
-	StageNetworks    map[string]NetworkSnapshot `json:"stageNetworks"`
-	Sources          []source.HTTPSource        `json:"sources"`
-	Candidates       []model.Candidate          `json:"candidates"`
-	TCPResults       []model.ProbeResult        `json:"tcpResults"`
-	HTTPSResults     []model.ProbeResult        `json:"httpsResults"`
-	BandwidthResults []model.ProbeResult        `json:"bandwidthResults"`
-	Stages           []model.StageProgress      `json:"stages"`
-	CompletedAt      map[string]time.Time       `json:"completedAt"`
+	HTTPSelectionComplete bool                       `json:"httpSelectionComplete,omitempty"`
+	LocalFiles            bool                       `json:"localFiles,omitempty"`
+	QUICResults           []model.ProbeResult        `json:"quicResults,omitempty"`
+	HTTP3Results          []model.ProbeResult        `json:"http3Results,omitempty"`
+	RetainedKeys          []string                   `json:"retainedKeys,omitempty"`
+	Version               int                        `json:"version"`
+	RunID                 string                     `json:"runId"`
+	ParentRunID           string                     `json:"parentRunId,omitempty"`
+	UpdatedAt             time.Time                  `json:"updatedAt"`
+	Network               NetworkSnapshot            `json:"network"`
+	Settings              config.Settings            `json:"settings"`
+	StageSettings         map[string]config.Settings `json:"stageSettings"`
+	StageNetworks         map[string]NetworkSnapshot `json:"stageNetworks"`
+	Sources               []source.HTTPSource        `json:"sources"`
+	Candidates            []model.Candidate          `json:"candidates"`
+	TCPResults            []model.ProbeResult        `json:"tcpResults"`
+	HTTPSResults          []model.ProbeResult        `json:"httpsResults"`
+	BandwidthResults      []model.ProbeResult        `json:"bandwidthResults"`
+	Stages                []model.StageProgress      `json:"stages"`
+	CompletedAt           map[string]time.Time       `json:"completedAt"`
 }
 
 type ResumeOption struct {
@@ -242,7 +247,51 @@ func runStartStage(stage string, settings config.Settings, base *Checkpoint) str
 	if restart := earlyStoppedRestartStage(*base, settings, stage); restart != "" {
 		return restart
 	}
+	if restart := incompleteHTTPRestartStage(*base, settings, stage); restart != "" {
+		return restart
+	}
 	return stage
+}
+
+// Older checkpoints may contain only the first N HTTP successes. They cannot
+// supply a best-N selection until the full connection-qualified pool is probed.
+func incompleteHTTPRestartStage(c Checkpoint, settings config.Settings, start string) string {
+	if start != StageBandwidth && start != StageRanking {
+		return ""
+	}
+	stage := StageHTTPS
+	connections, httpResults := c.TCPResults, c.HTTPSResults
+	if settings.RequireH3 {
+		stage, connections, httpResults = StageHTTP3, c.QUICResults, c.HTTP3Results
+	}
+	if !c.HTTPSelectionComplete {
+		return stage
+	}
+	measured := make(map[string]bool, len(httpResults))
+	for _, result := range httpResults {
+		measured[result.Candidate.Key()] = true
+	}
+	for _, result := range connections {
+		stats := result.TCP
+		if settings.RequireH3 {
+			stats = result.QUIC
+			if len(result.Endpoints) == 0 {
+				continue
+			}
+		}
+		if settings.AllowsPort(result.Candidate.Port) && settings.AllowsCountry(result.Candidate.Country) && stats.SuccessRate >= settings.ConnectionMinSuccessRate && !measured[result.Candidate.Key()] {
+			return stage
+		}
+	}
+	return ""
+}
+
+func incompleteHTTPRestartWarning(stage string) string {
+	label := "HTTPS"
+	if stage == StageHTTP3 {
+		label = "HTTP/3"
+	}
+	return "检查点尚未完成全部候选的 " + label + " 比较，必须从该阶段重新探测后才能选优"
 }
 
 // Early rejection only proves failure under the settings that made that decision.
@@ -334,6 +383,10 @@ func buildH3ResumeInfo(c Checkpoint, currentID string, settings config.Settings,
 		if restart := earlyStoppedRestartStage(c, settings, definition.stage); option.Available && restart != "" {
 			option.Available = false
 			option.Warnings = append(option.Warnings, earlyStoppedRestartWarning(restart))
+		}
+		if restart := incompleteHTTPRestartStage(c, settings, definition.stage); option.Available && restart != "" {
+			option.Available = false
+			option.Warnings = append(option.Warnings, incompleteHTTPRestartWarning(restart))
 		}
 		if option.Available {
 			if now.Sub(c.UpdatedAt) > 30*time.Minute {
