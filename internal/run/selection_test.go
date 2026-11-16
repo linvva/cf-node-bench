@@ -71,7 +71,7 @@ func TestDownloadQueuePlansTargetAndReplenishesByPassRate(t *testing.T) {
 	for i := range input {
 		input[i] = i
 	}
-	results := parallelUntil(t.Context(), input, 1, 4, func(_ context.Context, i int) int { return i }, func(i int) bool { return i >= 2 }, func(q model.StageQueue) { updates = append(updates, q) })
+	results := parallelUntil(t.Context(), input, 1, 4, 30, func(_ context.Context, i int) int { return i }, func(i int) bool { return i >= 2 }, func(q model.StageQueue) { updates = append(updates, q) })
 	if len(results) != 6 || len(updates) == 0 || updates[0].Planned != 4 || updates[0].Pending != 4 || updates[0].Pool != 30 {
 		t.Fatalf("initial queue or stopping condition incorrect: results=%v updates=%+v", results, updates)
 	}
@@ -88,9 +88,39 @@ func TestDownloadQueuePlansTargetAndReplenishesByPassRate(t *testing.T) {
 	if !batched || last.Passed != 4 || last.Active != 0 || last.Pending != 0 {
 		t.Fatalf("adaptive batch refill or queue drain failed: %+v", updates)
 	}
-	parallelUntil(t.Context(), []int{1, 2}, 3, 30, func(_ context.Context, i int) int { return i }, func(int) bool { return true }, func(q model.StageQueue) { last = q })
+	parallelUntil(t.Context(), []int{1, 2}, 3, 30, 2, func(_ context.Context, i int) int { return i }, func(int) bool { return true }, func(q model.StageQueue) { last = q })
 	if last.Target != 30 || last.Passed != 2 || last.Planned != 2 || last.Pending != 0 || last.Active != 0 {
 		t.Fatalf("exhausted candidates silently lowered the configured target: %+v", last)
+	}
+}
+
+func TestDownloadQueueExpandsBatchesUntilTargetOrExhaustion(t *testing.T) {
+	for _, test := range []struct {
+		name                 string
+		failures, want, pool int
+	}{
+		{"refill", 2, 5, 6},
+		{"exhausted", 7, 7, 7},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var updates []model.StageQueue
+			results := parallelUntil(t.Context(), []int{0, 1, 2, 3, 4, 5, 6}, 1, 3, 2,
+				func(_ context.Context, i int) int { return i },
+				func(i int) bool { return i >= test.failures },
+				func(q model.StageQueue) { updates = append(updates, q) })
+			if len(results) != test.want || updates[0].Pool != 2 {
+				t.Fatalf("unexpected batch admission: results=%v updates=%+v", results, updates)
+			}
+			for i, queue := range updates {
+				if queue.Planned > queue.Pool || queue.Active > 1 || i > 0 && (queue.Passed < updates[i-1].Passed || queue.Pool < updates[i-1].Pool || queue.Planned < updates[i-1].Planned) {
+					t.Fatalf("batch reset progress or exceeded capacity: %+v", updates)
+				}
+			}
+			last := updates[len(updates)-1]
+			if last.Pool != test.pool || last.Passed != max(0, test.want-test.failures) || last.Active != 0 || last.Pending != 0 {
+				t.Fatalf("wrong stopping condition: %+v", last)
+			}
+		})
 	}
 }
 
@@ -101,7 +131,7 @@ func TestDownloadQueueStopsAdmissionAtTargetAndKeepsInflightResults(t *testing.T
 	reached := make(chan model.StageQueue, 1)
 	done := make(chan []int, 1)
 	go func() {
-		done <- parallelUntil(ctx, []int{0, 1, 2, 3, 4}, 2, 2, func(ctx context.Context, i int) int {
+		done <- parallelUntil(ctx, []int{0, 1, 2, 3, 4}, 2, 2, 2, func(ctx context.Context, i int) int {
 			if i == 0 {
 				select {
 				case <-release:

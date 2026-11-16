@@ -1,6 +1,52 @@
 import { expect, test } from "@playwright/test";
 import type { RunProgress } from "../src/types";
 
+for(const mode of ["tcp_https","h3"] as const)test(`HTTP batches continue until the download target in ${mode}`,async({page},testInfo)=>{
+  await page.goto("/");
+  await expect(page.getByRole("heading",{name:"测速工作台"})).toBeVisible();
+  if(mode==="h3")await page.getByRole("tab",{name:"H3",exact:true}).click();
+  await page.getByRole("button",{name:"设置",exact:true}).click();
+  await page.getByLabel("HTTP 候选批量",{exact:true}).fill("2");
+  await page.getByLabel("带宽目标通过数",{exact:true}).fill("6");
+  await page.getByLabel("最终结果数",{exact:true}).fill("3");
+  await page.getByRole("button",{name:"保存设置",exact:true}).click();
+  await expect(page.getByText("设置已保存",{exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"测速工作台",exact:true}).click();
+  await page.getByRole("button",{name:"开始测速",exact:true}).click();
+  const queue=page.getByLabel("带宽新节点队列");
+  await expect(queue).toContainText("新节点通过：6 / 6",{timeout:10000});
+  expect(Number((await queue.locator("span").first().innerText()).split("：")[1])).toBeGreaterThan(2);
+  await expect(page.locator(".status-pill")).toHaveCount(3);
+  await expect(page.getByText("本轮候选已测完，未达到目标",{exact:true})).toHaveCount(0);
+  await page.screenshot({path:testInfo.outputPath("http-batch-refill.png")});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBe(0);
+});
+
+for(const mode of ["tcp_https","h3"] as const)test(`pins survive the next run outside the result quota in ${mode}`,async({page},testInfo)=>{
+  await page.goto("/");
+  await expect(page.getByRole("heading",{name:"测速工作台"})).toBeVisible();
+  if(mode==="h3")await page.getByRole("tab",{name:"H3",exact:true}).click();
+  await page.getByRole("button",{name:"开始测速",exact:true}).click();
+  const pin=page.getByRole("button",{name:/^固化 /}).first();
+  await expect(pin).toBeVisible({timeout:8000});
+  const label=(await pin.getAttribute("aria-label"))!;
+  const key=label.slice("固化 ".length);
+  await pin.click();
+  const unpin=page.getByRole("button",{name:`取消固化 ${key}`,exact:true});
+  await expect(unpin).toBeVisible();
+  await page.getByRole("button",{name:"开始测速",exact:true}).click();
+  await expect(unpin).toBeDisabled();
+  await expect(page.getByRole("button",{name:"开始测速",exact:true})).toBeVisible({timeout:8000});
+  const row=page.getByRole("row").filter({has:unpin});
+  await expect(row).toContainText("固化保留 · 通过");
+  await expect(page.locator(".status-pill")).toHaveCount(16);
+  await expect(unpin).toBeEnabled();
+  await page.screenshot({path:testInfo.outputPath("pinned-results.png")});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBe(0);
+  await unpin.click();
+  await expect(page.getByRole("button",{name:label,exact:true})).toBeVisible();
+});
+
 for(const mode of ["tcp_https","h3"] as const)test(`HTTP selection and download queues remain clear in ${mode}`,async({page},testInfo)=>{
   await page.addInitScript(()=>{
     window.runtime={EventsOn:(name,handler)=>{
@@ -236,7 +282,18 @@ test("publish settings switch modes without overlap",async({page},testInfo)=>{
   await expect(page.getByText("启用 Cloudflare 代理")).toBeVisible();
   await page.getByRole("tab",{name:"TXT 记录"}).click();
   await expect(page.getByText("启用 Cloudflare 代理")).not.toBeVisible();
-  await expect(page.getByText("104.18.1.20:443#US|HTTP44ms|186Mbps")).toBeVisible();
+  const outputPreview=page.getByLabel("发布内容预览");
+  await expect(outputPreview).toHaveText("104.18.1.20:443#US|44ms|186M");
+  const presets=page.getByRole("group",{name:"发布格式预设"});
+  await presets.getByRole("button",{name:"极简",exact:true}).click();
+  await expect(outputPreview).toHaveText("104.18.1.20:443#US");
+  await presets.getByRole("button",{name:"详细",exact:true}).click();
+  await expect(outputPreview).toHaveText("104.18.1.20:443#US|TCP22ms|HTTP44ms|186Mbps");
+  await presets.getByRole("button",{name:"简洁（推荐）"}).click();
+  const publishModes=page.getByRole("tablist",{name:"发布目标模式"});
+  await publishModes.getByRole("tab",{name:"H3",exact:true}).click();
+  await expect(outputPreview).toHaveText("104.18.1.20:443#US|H3|44ms|186M");
+  await publishModes.getByRole("tab",{name:"普通（TCP/HTTPS）"}).click();
   await page.locator(".main-content").evaluate(element=>{element.scrollTop=0;});
   await page.screenshot({path:testInfo.outputPath("publish-top.png"),fullPage:true});
   await page.getByRole("tab",{name:"汇总与节点列表"}).click();
@@ -315,7 +372,7 @@ test("H3 requirement shares configuration and history while keeping actual proto
   await expect(page.getByLabel("H3 检测数量")).toContainText("累计下载：0.0 MiB");
   await expect(page.getByText("edge.example.com:443",{exact:true})).toBeVisible({timeout:10000});await expect(toggle).toBeEnabled();
   await expect(page.getByRole("columnheader",{name:"QUIC 成功"})).toBeVisible();
-  await expect(page.getByText(/H3 入口已验证 · IPv4 · h3.speed.cloudflare.com/)).toBeVisible();
+  await expect(page.getByText(/H3 入口测量结果 · IPv4 · h3.speed.cloudflare.com/)).toBeVisible();
   await page.getByRole("button",{name:"复制结果",exact:true}).click();
   const copied=await page.evaluate(()=>(window as typeof window&{__copiedText?:string}).__copiedText);
   expect(copied).toContain("edge.example.com:443#JP|H3");expect(copied).not.toContain("TCP");

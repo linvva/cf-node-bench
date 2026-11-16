@@ -123,7 +123,7 @@ func TestRollingCancellationDrainsInflightWithoutStartingMore(t *testing.T) {
 	started := make(chan int, 4)
 	done := make(chan []int, 1)
 	go func() {
-		done <- parallelUntil(ctx, []int{0, 1, 2, 3}, 2, 4, func(ctx context.Context, value int) int {
+		done <- parallelUntil(ctx, []int{0, 1, 2, 3}, 2, 4, 2, func(ctx context.Context, value int) int {
 			started <- value
 			<-ctx.Done()
 			return value

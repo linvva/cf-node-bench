@@ -29,6 +29,7 @@ type Bootstrap struct {
 	PublishSettings    publish.SettingsView `json:"publishSettings"`
 	Sources            []source.HTTPSource  `json:"sources"`
 	History            []model.RunSummary   `json:"history"`
+	PinnedNodes        []model.PinnedNode   `json:"pinnedNodes"`
 	Network            NetworkInfo          `json:"network"`
 	Current            string               `json:"currentRunId,omitempty"`
 	Resume             runengine.ResumeInfo `json:"resume"`
@@ -83,7 +84,36 @@ func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 
 func (a *App) Bootstrap() Bootstrap {
 	network := detectNetwork()
-	return Bootstrap{Settings: a.store.Settings(), PublishSettings: a.store.PublishSettingsView(), Sources: a.store.Sources(), History: a.store.History(), Network: network, Current: a.manager.Current(), Resume: a.resumeInfo(network), MigrationNotice: a.store.MigrationNotice(), CurrentResultRunID: a.store.CurrentResultID()}
+	return Bootstrap{Settings: a.store.Settings(), PublishSettings: a.store.PublishSettingsView(), Sources: a.store.Sources(), History: a.store.History(), PinnedNodes: a.store.PinnedNodes(), Network: network, Current: a.manager.Current(), Resume: a.resumeInfo(network), MigrationNotice: a.store.MigrationNotice(), CurrentResultRunID: a.store.CurrentResultID()}
+}
+
+func (a *App) SetNodePinned(runID, candidateKey string, pinned bool) ([]model.PinnedNode, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.manager.Current() != "" {
+		return nil, fmt.Errorf("测速运行中不能修改固化节点")
+	}
+	summary, ok := a.store.HistoryByID(runID)
+	if !ok {
+		return nil, fmt.Errorf("未找到测速历史")
+	}
+	for _, result := range summary.Results {
+		if result.Candidate.Key() == candidateKey {
+			return a.store.SetNodePinned(summary.Mode, result.Candidate, pinned)
+		}
+	}
+	return nil, fmt.Errorf("未找到测速节点")
+}
+
+func (a *App) pinnedCandidates() []model.Candidate {
+	mode := a.store.Settings().ProbeMode()
+	candidates := []model.Candidate{}
+	for _, node := range a.store.PinnedNodes() {
+		if node.Mode == mode {
+			candidates = append(candidates, node.Candidate)
+		}
+	}
+	return candidates
 }
 
 func (a *App) SaveSettings(settings config.Settings) error {
@@ -161,8 +191,8 @@ func (a *App) PublishRun(runID, target string) error {
 	if !ok {
 		return fmt.Errorf("未找到测速历史")
 	}
-	if summary.State != "completed" {
-		return fmt.Errorf("只有已完成的测速可以发布")
+	if summary.State != "completed" && !(summary.State == "cancelled" && summary.PartialResults && len(summary.Results) > 0) {
+		return fmt.Errorf("只有已完成的测速或取消时保留的部分结果可以发布")
 	}
 	return a.queue.Enqueue(a.appContext(), summary, a.store.PublishSettings(), target)
 }
@@ -264,6 +294,7 @@ func (a *App) startRun(request runengine.StartRequest, paths []string) (string, 
 		}
 		currentRunID := a.latestRunID()
 		info := runengine.BuildResumeInfo(checkpoint, currentRunID, settings, a.store.Sources(), networkSnapshot, time.Now())
+		info = runengine.ApplyPinnedResumeInfo(info, checkpoint, a.pinnedCandidates())
 		var selected *runengine.ResumeOption
 		for index := range info.Options {
 			if info.Options[index].Stage == stage {
@@ -279,7 +310,7 @@ func (a *App) startRun(request runengine.StartRequest, paths []string) (string, 
 		}
 		base = &checkpoint
 	}
-	input := runengine.RunInput{LocalFiles: localFiles, Sources: a.store.Sources(), Retained: retained, Plan: runengine.RunPlan{StartStage: stage, Base: base, Network: networkSnapshot, Save: a.store.SaveCheckpoint}}
+	input := runengine.RunInput{LocalFiles: localFiles, Sources: a.store.Sources(), Retained: retained, Pinned: a.pinnedCandidates(), Plan: runengine.RunPlan{StartStage: stage, Base: base, Network: networkSnapshot, Save: a.store.SaveCheckpoint}}
 	return a.manager.Start(a.appContext(), a.engine, settings, input, func(progress model.RunProgress) {
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "run:progress", progress)
@@ -308,10 +339,15 @@ func (a *App) resumeInfo(network NetworkInfo) runengine.ResumeInfo {
 		return runengine.ResumeInfo{Options: []runengine.ResumeOption{}}
 	}
 	snapshot := runengine.NetworkSnapshot{Interface: network.Interface, IPv4: network.IPv4}
-	return runengine.BuildResumeInfo(checkpoint, a.latestRunID(), a.store.Settings(), a.store.Sources(), snapshot, time.Now())
+	info := runengine.BuildResumeInfo(checkpoint, a.latestRunID(), a.store.Settings(), a.store.Sources(), snapshot, time.Now())
+	return runengine.ApplyPinnedResumeInfo(info, checkpoint, a.pinnedCandidates())
 }
 
 func (a *App) CancelRun() bool { return a.manager.Cancel() }
+
+func (a *App) CancelRunWithResults(keepResults bool) bool {
+	return a.manager.CancelWithResults(keepResults)
+}
 
 func (a *App) handlePublishUpdate(update publish.Update) {
 	_ = a.store.UpdatePublication(update.RunID, update.Result)

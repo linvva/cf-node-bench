@@ -11,10 +11,11 @@ const targets=():PublishSettingsView=>({...structuredClone(defaultPublishSetting
 afterEach(()=>{cleanup();vi.restoreAllMocks();vi.useRealTimers();});
 describe("separate publication targets with shared credentials",()=>{
   it("leaves missing targets empty without inheriting ordinary destinations",()=>{
-    const old=JSON.parse(JSON.stringify(targets()));delete old.cloudflare.h3;delete old.github.h3;delete old.gist.h3;
+    const old=JSON.parse(JSON.stringify(targets()));delete old.cloudflare.h3;delete old.github.h3;delete old.gist.h3;delete old.output.format;old.output.tcpP95=true;old.output.bandwidth=false;
     const normalized=normalizeBootstrap({publishSettings:old} as Bootstrap).publishSettings;
     expect(normalized.cloudflare.h3).toEqual({recordName:"",recordType:"TXT"});expect(normalized.github.h3).toEqual({path:""});expect(normalized.gist.h3).toEqual({gistId:"",filename:""});
     expect(defaultPublishSettings.github.path).toBe("");expect(defaultPublishSettings.gist.filename).toBe("");
+    expect(normalized.output).toEqual({...old.output,format:"compact"});
     for(const target of ["cloudflare","github","gist"] as const){expect(publishTargetConfigured(normalized,target,"h3")).toBe(false);expect(publishTargetConfigured(normalized,target,"tcp_https")).toBe(true);}
   });
   it("accepts empty destinations and H3-only configuration but rejects incomplete Gist pairs",()=>{
@@ -63,5 +64,40 @@ describe("separate publication targets with shared credentials",()=>{
     fireEvent.click(within(modes).getByRole("tab",{name:"普通（TCP/HTTPS）"}));expect(screen.getByLabelText("Gist ID",{exact:true})).toHaveValue("abc123");fireEvent.click(within(modes).getByRole("tab",{name:"H3"}));expect(screen.getByLabelText("Gist ID",{exact:true})).toHaveValue("def456");expect(getAppState().settings.requireH3).toBe(false);
     fireEvent.click(screen.getByRole("button",{name:/保存设置/}));await waitFor(async()=>expect((await bridge.bootstrap()).publishSettings.gist.h3).toEqual({gistId:"def456",filename:"h3.txt"}));
     fireEvent.change(screen.getByLabelText("Gist ID",{exact:true}),{target:{value:""}});fireEvent.change(screen.getByLabelText("文件名",{exact:true}),{target:{value:""}});fireEvent.click(screen.getByRole("button",{name:/保存设置/}));await waitFor(async()=>expect((await bridge.bootstrap()).publishSettings.gist.h3).toEqual({gistId:"",filename:""}));
+  });
+});
+
+describe("publication output presets",()=>{
+  it.each([false,true])("previews presets and preserves custom fields after saving (H3=%s)",async(isH3)=>{
+    await bridge.savePublishSettings(request(structuredClone(defaultPublishSettings)));
+    render(<App/>);await screen.findByRole("heading",{name:"测速工作台"});
+    fireEvent.click(screen.getByRole("button",{name:"发布"}));
+    await screen.findByRole("heading",{name:"结果发布"});
+    if(isH3)fireEvent.click(within(screen.getByRole("tablist",{name:"发布目标模式"})).getByRole("tab",{name:"H3"}));
+    const preview=()=>screen.getByLabelText("发布内容预览");
+    const presets=()=>within(screen.getByRole("group",{name:"发布格式预设"}));
+    const compact=`104.18.1.20:443#US|${isH3?"H3|":""}44ms|186M`;
+    expect(preview()).toHaveTextContent(compact);
+    expect(presets().getByRole("button",{name:"简洁（推荐）"})).toHaveAttribute("aria-pressed","true");
+    fireEvent.click(presets().getByRole("button",{name:"极简"}));
+    expect(preview()).toHaveTextContent(`104.18.1.20:443#US${isH3?"|H3":""}`);
+    fireEvent.click(screen.getByRole("checkbox",{name:"国家代码"}));
+    expect(preview().textContent).toBe(`104.18.1.20:443${isH3?"#H3":""}`);
+    fireEvent.click(presets().getByRole("button",{name:"详细"}));
+    expect(preview()).toHaveTextContent(`104.18.1.20:443#US|${isH3?"H3|QUIC22ms|HTTP344ms":"TCP22ms|HTTP44ms"}|186Mbps`);
+    fireEvent.click(presets().getByRole("button",{name:"简洁（推荐）"}));
+    fireEvent.click(screen.getByRole("checkbox",{name:"国家代码"}));
+    fireEvent.click(screen.getByRole("checkbox",{name:"连接 P95（TCP / QUIC）"}));
+    fireEvent.click(screen.getByRole("checkbox",{name:"下载带宽"}));
+    const custom=`104.18.1.20:443#${isH3?"H3|QUIC":"TCP"}22ms|44ms`;
+    expect(preview().textContent).toBe(custom);
+    expect(screen.getByRole("group",{name:"发布格式预设"}).querySelector('[aria-pressed="true"]')).toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
+    await waitFor(()=>expect(getAppState().publishSettings.output).toEqual({format:"compact",country:false,tcpP95:true,httpLatency:true,bandwidth:false}));
+    expect((await bridge.bootstrap()).publishSettings.output).toEqual(getAppState().publishSettings.output);
+    fireEvent.click(screen.getByRole("button",{name:"测速工作台"}));
+    fireEvent.click(screen.getByRole("button",{name:"发布"}));
+    if(isH3)fireEvent.click(within(screen.getByRole("tablist",{name:"发布目标模式"})).getByRole("tab",{name:"H3"}));
+    expect(preview().textContent).toBe(custom);
   });
 });

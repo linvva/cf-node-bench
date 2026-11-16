@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button, Checkbox, Input, Modal, Switch, Tabs, toast } from "@heroui/react";
 import { CheckCircle2, Cloud, Code2, Copy, ExternalLink, FileText, GitBranch, MessageCircle, Save, Send, Trash2, X } from "lucide-react";
 import { actions, useAppStore } from "../../store";
-import type { Mode, PublicationResult, PublishCredentialTarget, PublishSaveRequest, PublishSettingsView, PublishTarget } from "../../types";
+import type { Mode, PublicationResult, PublishCredentialTarget, PublishOutputFields, PublishSaveRequest, PublishSettingsView, PublishTarget } from "../../types";
 import { ProtocolTabs } from "../ProtocolTabs";
 import { publishSettingsForMode, publishTargetConfigured } from "../../lib/bridge";
 import workerSource from "../../../../deploy/telegram-relay/worker.js?raw";
@@ -11,10 +11,15 @@ const labels:Record<PublishTarget,string>={cloudflare:"Cloudflare",github:"GitHu
 type PublishTokens={cloudflareToken:string;githubToken:string;gistToken:string;telegramBotToken:string;telegramRelayKey:string};
 type SetupGuideTarget="cloudflare"|"github"|"gist"|"";
 const emptyTokens:PublishTokens={cloudflareToken:"",githubToken:"",gistToken:"",telegramBotToken:"",telegramRelayKey:""};
+const outputPresets:{id:string;label:string;output:PublishOutputFields}[]=[
+  {id:"minimal",label:"极简",output:{format:"compact",country:true,tcpP95:false,httpLatency:false,bandwidth:false}},
+  {id:"compact",label:"简洁（推荐）",output:{format:"compact",country:true,tcpP95:false,httpLatency:true,bandwidth:true}},
+  {id:"detailed",label:"详细",output:{format:"detailed",country:true,tcpP95:true,httpLatency:true,bandwidth:true}},
+];
 
 export function PublishPage(){
   const settings=useAppStore(state=>state.publishSettings);
-  const latest=useAppStore(state=>state.history.find(item=>item.state==="completed"));
+  const latest=useAppStore(state=>state.history.find(item=>item.state==="completed"||(item.state==="cancelled"&&item.partialResults&&item.results.length>0)));
   const [form,setForm]=useState<PublishSettingsView>(()=>structuredClone(settings));
   const [targetMode,setTargetMode]=useState<Mode>("tcp_https");
   const isH3=targetMode==="h3";
@@ -58,6 +63,7 @@ export function PublishPage(){
   const enabledTargets=(mode:Mode)=>(Object.keys(labels) as PublishTarget[]).filter(target=>settings[target].enabled&&publishTargetConfigured(settings,target,mode)).map(target=>labels[target]);
   const ordinaryTargets=enabledTargets("tcp_https"),h3Targets=enabledTargets("h3");
   const preview=previewLine(form,isH3);
+  const outputPreset=outputPresets.find(preset=>preset.output.format===(form.output.format||"compact")&&preset.output.country===form.output.country&&preset.output.tcpP95===form.output.tcpP95&&preset.output.httpLatency===form.output.httpLatency&&preset.output.bandwidth===form.output.bandwidth)?.id;
 
   return <div className="page publish-page" data-testid="publish-page">
     <header className="page-header"><div><h1>结果发布</h1><p>共用凭据；普通和 H3 目标分别保存，按每轮结果的实际协议发布。</p></div><div className="page-action-area"><div className="page-actions"><Button variant="secondary" isDisabled={!latest||busy==="publish"} onPress={()=>void publishLatest()}><Send size={16}/>发布最近结果</Button><Button variant="primary" isDisabled={busy==="save"} onPress={()=>void save()}><Save size={16}/>保存设置</Button></div><p className="page-action-status" role={error?"alert":undefined} title={error}>{error||"\u00a0"}</p></div></header>
@@ -66,12 +72,12 @@ export function PublishPage(){
     <div className={`publish-auto-state ${ordinaryTargets.length||h3Targets.length?"active":"inactive"}`} aria-live="polite"><CheckCircle2 size={16}/><div><strong>{ordinaryTargets.length||h3Targets.length?"自动发布已生效":"自动发布尚未生效"}</strong><span>普通（TCP/HTTPS）：{ordinaryTargets.join("、")||"无有效目标，发布时跳过"}</span><span>H3：{h3Targets.join("、")||"无有效目标，发布时跳过"}</span><span>启用渠道并配置目标、保存后生效。</span></div></div>
 
     <div className="publish-overview">
-      <section className="panel publish-section"><div className="publish-heading"><div><h2>输出字段</h2><p>TXT、GitHub 仓库、Gist 与 Telegram 详细列表使用同一行格式。</p></div></div><div className="publish-options">
+      <section className="panel publish-section"><div className="publish-heading"><div><h2>输出格式</h2><p>TXT、GitHub 仓库、Gist 与 Telegram 详细列表使用同一行格式。</p></div></div><div className="publish-presets" role="group" aria-label="发布格式预设">{outputPresets.map(preset=><Button key={preset.id} size="sm" variant={outputPreset===preset.id?"primary":"secondary"} aria-pressed={outputPreset===preset.id} onPress={()=>patch("output",{...preset.output})}>{preset.label}</Button>)}</div><div className="publish-options">
         <Check label="国家代码" selected={form.output.country} onChange={country=>patch("output",{...form.output,country})}/>
         <Check label="连接 P95（TCP / QUIC）" selected={form.output.tcpP95} onChange={tcpP95=>patch("output",{...form.output,tcpP95})}/>
         <Check label="HTTP 平均延迟" selected={form.output.httpLatency} onChange={httpLatency=>patch("output",{...form.output,httpLatency})}/>
         <Check label="下载带宽" selected={form.output.bandwidth} onChange={bandwidth=>patch("output",{...form.output,bandwidth})}/>
-      </div><code className="publish-preview">{preview}</code></section>
+      </div><code className="publish-preview" aria-label="发布内容预览" aria-live="polite">{preview}</code><p className="publish-output-help">选择预设后仍可勾选字段。极简与简洁使用整数，M 表示 Mbps；完整精度可在测速详情中查看。H3 始终保留协议标记。</p></section>
       <section className="panel publish-section"><div className="publish-heading"><div><h2>请求策略</h2><p>仅网络错误、408、429 和 5xx 会重试。</p></div></div><div className="field-grid">
         <NumberField label="请求超时 (ms)" value={form.request.timeoutMs} min={1000} max={60000} onChange={timeoutMs=>patch("request",{...form.request,timeoutMs})}/>
         <NumberField label="额外重试次数" value={form.request.maxRetries} min={0} max={5} onChange={maxRetries=>patch("request",{...form.request,maxRetries})}/>
@@ -178,6 +184,15 @@ export function validatePublishSettings(form:PublishSettingsView,tokens:PublishT
 }
 
 function previewLine(form:PublishSettingsView,isH3=false){
+  if(form.output.format!=="detailed"){
+    const labels:string[]=[];
+    if(form.output.country)labels.push("US");
+    if(isH3)labels.push("H3");
+    if(form.output.tcpP95)labels.push(isH3?"QUIC22ms":"TCP22ms");
+    if(form.output.httpLatency)labels.push("44ms");
+    if(form.output.bandwidth)labels.push("186M");
+    return `104.18.1.20:443${labels.length?`#${labels.join("|")}`:""}`;
+  }
   const values=[`104.18.1.20:443${form.output.country?"#US":""}${isH3?(form.output.country?"|H3":"#H3"):""}`];
   if(form.output.tcpP95)values.push((isH3?"QUIC22ms":"TCP22ms"));
   if(form.output.httpLatency)values.push((isH3?"HTTP344ms":"HTTP44ms"));

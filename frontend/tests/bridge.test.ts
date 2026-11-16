@@ -16,6 +16,7 @@ describe("Wails bridge normalization",()=>{
     expect(value.settings.retainPreviousResults).toBe(true);
     expect(value.settings.scoreWeights).toEqual({bandwidth:40,http:25,connection:15,reliability:15,jitter:5});
     expect(value.sources).toEqual([]);
+    expect(value.pinnedNodes).toEqual([]);
     expect(value.history[0].results).toEqual([]);
     expect(value.history[0].failures).toEqual({});
     expect(value.history[0].publications).toEqual([]);

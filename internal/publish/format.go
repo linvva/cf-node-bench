@@ -10,6 +10,9 @@ import (
 )
 
 func FormatResult(result model.ProbeResult, fields OutputFields) string {
+	if fields.Format != OutputFormatDetailed {
+		return formatCompactResult(result, fields)
+	}
 	base := result.Candidate.Key()
 	if model.NormalizeMode(result.Mode) == model.ModeH3 {
 		labels := []string{}
@@ -42,6 +45,32 @@ func FormatResult(result model.ProbeResult, fields OutputFields) string {
 		parts = append(parts, compact(result.Bandwidth.Mbps)+"Mbps")
 	}
 	return strings.Join(parts, "|")
+}
+
+func formatCompactResult(result model.ProbeResult, fields OutputFields) string {
+	base := result.Candidate.Key()
+	labels := []string{}
+	if fields.Country && result.Candidate.Country != "" {
+		labels = append(labels, result.Candidate.Country)
+	}
+	connection, http, connectionLabel := result.TCP.P95MS, result.HTTPS.AverageMS, "TCP"
+	if model.NormalizeMode(result.Mode) == model.ModeH3 {
+		labels = append(labels, "H3")
+		connection, http, connectionLabel = result.QUIC.P95MS, result.HTTP3.AverageMS, "QUIC"
+	}
+	if fields.TCPP95 {
+		labels = append(labels, connectionLabel+integer(connection)+"ms")
+	}
+	if fields.HTTPLatency {
+		labels = append(labels, integer(http)+"ms")
+	}
+	if fields.Bandwidth {
+		labels = append(labels, integer(result.Bandwidth.Mbps)+"M")
+	}
+	if len(labels) == 0 {
+		return base
+	}
+	return base + "#" + strings.Join(labels, "|")
 }
 
 func FormatResults(results []model.ProbeResult, fields OutputFields) string {
@@ -80,4 +109,8 @@ func CloudflareContents(results []model.ProbeResult, settings Settings) (content
 func compact(value float64) string {
 	rounded := math.Round((value+1e-9)*10) / 10
 	return strings.TrimSuffix(strconv.FormatFloat(rounded, 'f', 1, 64), ".0")
+}
+
+func integer(value float64) string {
+	return strconv.FormatFloat(math.Round(value), 'f', 0, 64)
 }

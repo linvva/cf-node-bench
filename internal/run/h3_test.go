@@ -216,10 +216,11 @@ func TestH3CancellationPreservesOnlyCompleteStages(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	input := h3RunInput()
+	input.Pinned = []model.Candidate{{AddressType: model.AddressIPv4, IP: "192.0.2.1", Port: 443}}
 	var checkpoint Checkpoint
 	input.Plan.Save = func(c Checkpoint) error { checkpoint = c; return nil }
 	summary := engine.Run(ctx, "cancel", settings, input, nil)
-	if summary.State != "cancelled" {
+	if summary.State != "cancelled" || len(summary.Results) != 0 {
 		t.Fatal(summary.State)
 	}
 	if _, ok := checkpoint.Stage(StageQUIC); ok || len(checkpoint.QUICResults) > 0 {

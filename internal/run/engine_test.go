@@ -196,6 +196,7 @@ func TestCancelledStageDoesNotPersistPartialSamples(t *testing.T) {
 	go func() {
 		done <- engine.Run(ctx, "cancel-https", settings, RunInput{
 			Sources: []source.HTTPSource{{Enabled: true}},
+			Pinned:  []model.Candidate{{AddressType: model.AddressIPv4, IP: "1.1.1.1", Port: 443}},
 			Plan: RunPlan{StartStage: StageSource, Save: func(checkpoint Checkpoint) error {
 				checkpoints = append(checkpoints, checkpoint)
 				return nil
@@ -205,11 +206,11 @@ func TestCancelledStageDoesNotPersistPartialSamples(t *testing.T) {
 	<-probe.started
 	cancel()
 	summary := <-done
-	if summary.State != "cancelled" || len(checkpoints) == 0 {
+	if summary.State != "cancelled" || len(summary.Results) != 0 || len(checkpoints) == 0 {
 		t.Fatalf("unexpected cancelled run: summary=%+v checkpoints=%d", summary, len(checkpoints))
 	}
 	last := checkpoints[len(checkpoints)-1]
-	if len(last.TCPResults) != 1 || len(last.HTTPSResults) != 0 {
+	if len(last.TCPResults) != 1 || !last.TCPResults[0].Pinned || len(last.HTTPSResults) != 0 {
 		t.Fatalf("partial HTTPS samples were persisted: %+v", last)
 	}
 	if _, ok := last.Stage("tcp"); !ok {

@@ -29,8 +29,8 @@ func TestSettingsValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings.BandwidthCandidates = settings.HTTPCandidateCount + 1
-	if err := settings.Validate(); err == nil {
-		t.Fatal("expected candidate relationship error")
+	if err := settings.Validate(); err != nil {
+		t.Fatalf("a success target may require multiple HTTP batches: %v", err)
 	}
 }
 
@@ -150,8 +150,8 @@ func TestH3SettingsPublicDefaultAndSharedWeights(t *testing.T) {
 	settings = DefaultH3Settings()
 	settings.VerificationHost = "worker.test"
 	settings.HTTPCandidateCount = 1
-	if settings.Validate() == nil {
-		t.Fatal("invalid H3 pool bounds accepted")
+	if err := settings.Validate(); err != nil {
+		t.Fatalf("H3 may refill beyond its first HTTP batch: %v", err)
 	}
 }
 

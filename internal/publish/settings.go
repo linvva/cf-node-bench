@@ -15,13 +15,16 @@ const SettingsVersion = 4
 const (
 	TelegramDeliveryDirect = "direct"
 	TelegramDeliveryRelay  = "relay"
+	OutputFormatCompact    = "compact"
+	OutputFormatDetailed   = "detailed"
 )
 
 type OutputFields struct {
-	Country     bool `json:"country"`
-	TCPP95      bool `json:"tcpP95"`
-	HTTPLatency bool `json:"httpLatency"`
-	Bandwidth   bool `json:"bandwidth"`
+	Format      string `json:"format"`
+	Country     bool   `json:"country"`
+	TCPP95      bool   `json:"tcpP95"`
+	HTTPLatency bool   `json:"httpLatency"`
+	Bandwidth   bool   `json:"bandwidth"`
 }
 
 type RequestPolicy struct {
@@ -160,7 +163,7 @@ type SaveRequest struct {
 func DefaultSettings() Settings {
 	return Settings{
 		Version:    SettingsVersion,
-		Output:     OutputFields{Country: true, HTTPLatency: true, Bandwidth: true},
+		Output:     OutputFields{Format: OutputFormatCompact, Country: true, HTTPLatency: true, Bandwidth: true},
 		Request:    RequestPolicy{TimeoutMS: 10000, MaxRetries: 2, RetryDelayMS: 1000},
 		Cloudflare: CloudflareSettings{RecordType: "A", TTL: 60, H3: CloudflareH3Target{RecordType: "TXT"}},
 		GitHub:     GitHubSettings{Branch: "main"},
@@ -173,6 +176,9 @@ func (s *Settings) Normalize() {
 	if s.Version == 0 {
 		*s = DefaultSettings()
 		return
+	}
+	if s.Output.Format == "" {
+		s.Output.Format = OutputFormatCompact
 	}
 	if s.Version < 2 && s.Gist.GistID != "" && strings.TrimSpace(s.Gist.Filename) == "" {
 		s.Gist.Filename = "ip.txt"
@@ -231,6 +237,9 @@ func (r SaveRequest) Merge(current Settings) Settings {
 			RelayURL: strings.TrimRight(strings.TrimSpace(r.Settings.Telegram.RelayURL), "/"), RelayKey: current.Telegram.RelayKey,
 		},
 	}
+	if next.Output.Format == "" {
+		next.Output.Format = OutputFormatCompact
+	}
 	if token := strings.TrimSpace(r.CloudflareToken); token != "" {
 		next.Cloudflare.APIToken = token
 	}
@@ -250,6 +259,9 @@ func (r SaveRequest) Merge(current Settings) Settings {
 }
 
 func (s Settings) Validate() error {
+	if s.Output.Format != "" && s.Output.Format != OutputFormatCompact && s.Output.Format != OutputFormatDetailed {
+		return fmt.Errorf("未知的发布输出格式，请重新选择格式预设")
+	}
 	if err := s.validateH3Targets(); err != nil {
 		return err
 	}

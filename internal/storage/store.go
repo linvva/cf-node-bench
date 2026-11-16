@@ -24,6 +24,7 @@ type data struct {
 	Publish            publish.Settings    `json:"publish"`
 	Sources            []source.HTTPSource `json:"sources"`
 	History            []model.RunSummary  `json:"history"`
+	PinnedNodes        []model.PinnedNode  `json:"pinnedNodes"`
 	MigrationMessage   string              `json:"migrationNotice,omitempty"`
 	CurrentResultRunID string              `json:"currentResultRunId,omitempty"`
 }
@@ -174,6 +175,34 @@ func (s *Store) History() []model.RunSummary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return append([]model.RunSummary{}, s.data.History...)
+}
+
+func (s *Store) PinnedNodes() []model.PinnedNode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]model.PinnedNode{}, s.data.PinnedNodes...)
+}
+
+func (s *Store) SetNodePinned(mode model.Mode, candidate model.Candidate, pinned bool) ([]model.PinnedNode, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mode = model.NormalizeMode(mode)
+	nodes := make([]model.PinnedNode, 0, len(s.data.PinnedNodes)+1)
+	for _, node := range s.data.PinnedNodes {
+		if node.Mode != mode || node.Candidate.Key() != candidate.Key() {
+			nodes = append(nodes, node)
+		}
+	}
+	if pinned {
+		nodes = append(nodes, model.PinnedNode{Mode: mode, Candidate: candidate})
+	}
+	previous := s.data.PinnedNodes
+	s.data.PinnedNodes = nodes
+	if err := s.persistLocked(); err != nil {
+		s.data.PinnedNodes = previous
+		return nil, err
+	}
+	return append([]model.PinnedNode{}, nodes...), nil
 }
 
 func (s *Store) CurrentResultID() string {

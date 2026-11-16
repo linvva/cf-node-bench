@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button, toast } from "@heroui/react";
-import { Activity, Database, Moon, Send, Settings, Sun, SunMoon, Upload, Zap } from "lucide-react";
+import { Activity, Database, Moon, Send, Settings, Sun, SunMoon, Upload } from "lucide-react";
+import appIcon from "../../build/appicon.png";
 import { actions, useAppStore } from "./store";
 import { bridge } from "./lib/bridge";
 import { RunWorkspace } from "./features/run/RunWorkspace";
@@ -42,11 +43,11 @@ export function App(){
   const themeIcon=theme==="system"?<SunMoon size={17}/>:theme==="dark"?<Moon size={17}/>:<Sun size={17}/>;
   const nextTheme=()=>setTheme(value=>value==="system"?"light":value==="light"?"dark":"system");
 
-  if(!ready) return <div className="loading-shell"><Zap size={24}/><span>正在载入工作台</span></div>;
+  if(!ready) return <div className="loading-shell"><img className="brand-mark" src={appIcon} alt=""/><span>正在载入工作台</span></div>;
   return <div className="app-shell">
     {dragging&&<div className="file-drop-overlay" role="status"><div><Upload size={36}/><strong>{running||preparingLocal||savingMode?"测速正在运行或准备中，暂不能添加文件":"释放开始测速"}</strong><span>CSV / TXT / JSON · 可一次拖入多个文件</span></div></div>}
     <aside className="sidebar">
-      <div className="brand"><span className="brand-mark"><Zap size={18}/></span><span><strong>CF Node Bench</strong><small>网络节点测量</small></span></div>
+      <div className="brand"><img className="brand-mark" src={appIcon} alt=""/><span><strong>CF Node Bench</strong><small>网络节点测量</small></span></div>
 
       <nav aria-label="主导航">
         <Button variant={page==="run"?"primary":"tertiary"} onPress={()=>setPage("run")}><Activity size={17}/>测速工作台{running&&<span className="live-dot"/>}</Button>
@@ -56,7 +57,7 @@ export function App(){
       </nav>
       <div className="sidebar-foot">
         <span title={`切换主题：${theme}`}><Button isIconOnly variant="tertiary" aria-label={`当前主题：${theme}`} onPress={nextTheme}>{themeIcon}</Button></span>
-        <span>v0.8.2</span>
+        <span>v0.9.0</span>
       </div>
     </aside>
     <main className="main-content">{migrationNotice&&<p className="migration-notice" role="status">{migrationNotice}</p>}{page==="run"?<RunWorkspace/>:page==="sources"?<SourcesPage/>:page==="publish"?<PublishPage/>:<SettingsPage/>}</main>

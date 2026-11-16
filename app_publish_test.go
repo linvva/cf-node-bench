@@ -23,6 +23,37 @@ func configureH3Gist(t *testing.T, app *App) {
 	}
 }
 
+func TestAppManualPublicationRequiresCompletedOrRetainedResults(t *testing.T) {
+	for _, test := range []struct {
+		name, state      string
+		partial, results bool
+		allowed          bool
+	}{
+		{"completed", "completed", false, true, true},
+		{"retained", "cancelled", true, true, true},
+		{"discarded", "cancelled", false, false, false},
+		{"unmarked", "cancelled", false, true, false},
+		{"empty", "cancelled", true, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app := testApp(t)
+			summary := model.RunSummary{RunID: "manual", State: test.state, PartialResults: test.partial}
+			if test.results {
+				summary.Results = []model.ProbeResult{{Candidate: model.Candidate{IP: "192.0.2.1", Port: 443}}}
+			}
+			if err := app.store.AddHistory(summary); err != nil {
+				t.Fatal(err)
+			}
+			// No targets are configured, so an accepted request reaches the queue
+			// without making any external requests.
+			err := app.PublishRun(summary.RunID, "all")
+			if test.allowed && err != publish.ErrNoTargets || !test.allowed && (err == nil || err == publish.ErrNoTargets) {
+				t.Fatalf("unexpected publication eligibility: %v", err)
+			}
+		})
+	}
+}
+
 func TestAppConnectionTestSelectsH3GistWithoutChangingSharedSettings(t *testing.T) {
 	app := testApp(t)
 	configureH3Gist(t, app)

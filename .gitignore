@@ -9,5 +9,6 @@
 /frontend/test-results/
 /frontend/wailsjs/
 /coverage/
+/output/
 *.log
 .DS_Store

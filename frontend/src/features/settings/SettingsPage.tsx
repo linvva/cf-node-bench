@@ -9,7 +9,7 @@ import { CountryPicker } from "./CountryPicker";
 
 const constraints = {
   connectionConcurrency:[1,256,"连接并发数"],httpConcurrency:[1,64,"HTTP 并发数"],bandwidthConcurrency:[1,10,"带宽并发数"],
-  connectionProbeCount:[1,10,"连接探测次数"],httpProbeCount:[1,10,"HTTP 探测次数"],httpCandidateCount:[1,5000,"HTTP 候选数"],
+  connectionProbeCount:[1,10,"连接探测次数"],httpProbeCount:[1,10,"HTTP 探测次数"],httpCandidateCount:[1,5000,"HTTP 候选批量"],
   connectTimeoutMs:[100,30000,"连接超时"],requestTimeoutMs:[500,60000,"HTTPS 超时"],h3ConnectTimeoutMs:[100,30000,"QUIC 超时"],h3RequestTimeoutMs:[500,60000,"HTTP/3 超时"],
   bandwidthTimeoutMs:[1000,120000,"带宽总超时"],sourceTimeoutMs:[500,60000,"数据源超时"],sourceRetries:[0,3,"数据源重试次数"],bandwidthCandidates:[1,500,"带宽目标通过数"],finalResultCount:[1,100,"最终结果数"],
 } satisfies Record<string,[number,number,string]>;
@@ -43,11 +43,11 @@ export function SettingsPage() {
           <Field label={`${httpLabel} 并发`} value={form.httpConcurrency} min={1} max={64} onChange={(value) => number("httpConcurrency", value)} />
           <Field label="带宽并发" value={form.bandwidthConcurrency} min={1} max={10} onChange={(value) => number("bandwidthConcurrency", value)} />
         </SettingsSection>
-        <SettingsSection title="候选池与过滤" description="连接合格的节点全部完成 HTTP 检测，再按成功率、P95 延迟选出候选池。">
-          <Field label="HTTP 候选池" value={form.httpCandidateCount} min={1} max={5000} onChange={(value) => number("httpCandidateCount", value)} />
+        <SettingsSection title="候选与过滤" description="连接合格的节点全部完成 HTTP 检测，再按成功率、P95 延迟排序，分批进入带宽候选池。">
+          <Field label="HTTP 候选批量" value={form.httpCandidateCount} min={1} max={5000} onChange={(value) => number("httpCandidateCount", value)} />
           <Field label="带宽目标通过数" value={form.bandwidthCandidates} min={1} max={500} onChange={(value) => number("bandwidthCandidates", value)} />
           <Field label="最终结果数" value={form.finalResultCount} min={1} max={100} onChange={(value) => number("finalResultCount", value)} />
-          <div className="field field-wide"><small>带宽按目标数量首次排队，再按通过率批量补测；达到目标后等待在测任务完成，可能略超目标。空白过滤列表表示不限，排除国家优先。</small></div>
+          <div className="field field-wide"><small>HTTP 候选批量决定首批及每次补入的数量，不限制总测试数。未达带宽目标时继续从剩余 HTTP 合格节点补入，直到达标或全部测完；达到目标后等待在测任务完成，可能略超目标。空白过滤列表表示不限，排除国家优先。</small></div>
           <div className="field field-wide"><label>允许端口</label><Input aria-label="允许端口" value={form.allowedPorts.join(", ")} onChange={(event) => setForm((current) => ({ ...current, allowedPorts: event.target.value.split(/[,\s]+/).filter(Boolean).map(Number) }))} /><small>逗号分隔；留空表示不限</small></div>
           <CountryPicker label="允许国家" value={form.allowedCountries} description="留空表示不限；支持按中文名称或代码搜索" onChange={(value) => setForm((current) => ({ ...current, allowedCountries: value }))} />
           <CountryPicker label="排除国家" value={form.blockedCountries} description={`仅匹配数据源提供的国家标签；命中后在 ${connectionLabel} 前排除并显示数量`} onChange={(value) => setForm((current) => ({ ...current, blockedCountries: value }))} />
@@ -104,7 +104,6 @@ export function validateSettings(form: Settings) {
     if (form.maxDownloadBytes < 1048576 || form.maxDownloadBytes > 1073741824) return "最大下载量必须在 1 到 1024 MiB 之间";
     const bandwidthURLMessage = validateBandwidthTestURL(form.bandwidthTestUrl)||validateBandwidthTestURL(form.h3BandwidthTestUrl);
     if (bandwidthURLMessage) return bandwidthURLMessage;
-    if(form.bandwidthCandidates>form.httpCandidateCount)return "带宽目标通过数不能大于 HTTP 候选数";
     if (form.finalResultCount > form.bandwidthCandidates) return "最终结果数不能大于带宽目标通过数";
     if (form.allowedPorts.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) return "端口必须在 1 到 65535 之间";
     if ([...form.allowedCountries, ...form.blockedCountries].some((country) => !/^[A-Z]{2}$/.test(country))) return "国家代码必须是两个大写字母";

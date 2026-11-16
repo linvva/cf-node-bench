@@ -13,6 +13,10 @@ func TestDefaultSettingsAndSecretMerge(t *testing.T) {
 	if settings.Version != SettingsVersion || settings.Cloudflare.RecordType != "A" || settings.Cloudflare.Proxied || settings.Gist.Filename != "" || settings.Telegram.ContentMode != "summary" || settings.Telegram.DeliveryMode != TelegramDeliveryDirect {
 		t.Fatalf("unexpected defaults: %+v", settings)
 	}
+	if settings.Output != (OutputFields{Format: OutputFormatCompact, Country: true, HTTPLatency: true, Bandwidth: true}) {
+		t.Fatalf("unexpected output defaults: %+v", settings.Output)
+	}
+	settings.Output.Format = OutputFormatDetailed
 	settings.Cloudflare.APIToken = "cf-old"
 	settings.GitHub.Token = "gh-old"
 	settings.Gist.Token = "gist-old"
@@ -30,6 +34,31 @@ func TestDefaultSettingsAndSecretMerge(t *testing.T) {
 	merged := request.Merge(settings)
 	if merged.Cloudflare.APIToken != "cf-old" || merged.GitHub.Token != "gh-new" || merged.Gist.Token != "gist-new" || merged.Telegram.BotToken != "tg-old" || merged.Telegram.RelayKey != "relay-new" {
 		t.Fatalf("secret merge=%+v", merged)
+	}
+	if merged.Output != settings.Output {
+		t.Fatalf("merge changed selected output format or fields: %+v", merged.Output)
+	}
+}
+
+func TestMissingOutputFormatPreservesSelectedFields(t *testing.T) {
+	var settings Settings
+	if err := json.Unmarshal([]byte(`{"version":4,"output":{"country":false,"tcpP95":true,"httpLatency":false,"bandwidth":false}}`), &settings); err != nil {
+		t.Fatal(err)
+	}
+	settings.Normalize()
+	want := OutputFields{Format: OutputFormatCompact, TCPP95: true}
+	if settings.Output != want {
+		t.Fatalf("migration changed selected fields: %+v", settings.Output)
+	}
+	request := SaveRequest{Settings: settings.View()}
+	request.Settings.Output.Format = ""
+	if got := request.Merge(settings).Output; got != want {
+		t.Fatalf("legacy request changed selected fields: %+v", got)
+	}
+	settings.Output.Format = OutputFormatDetailed
+	settings.Normalize()
+	if settings.Output.Format != OutputFormatDetailed {
+		t.Fatal("normalization replaced an explicitly selected format")
 	}
 }
 
@@ -235,6 +264,15 @@ func TestSettingsV2MigrationDefaultsTelegramToDirect(t *testing.T) {
 
 func TestSettingsValidation(t *testing.T) {
 	settings := DefaultSettings()
+	settings.Output.Format = "unknown"
+	if err := settings.Validate(); err == nil {
+		t.Fatal("expected invalid output format")
+	}
+	settings = DefaultSettings()
+	settings.Output.Format = OutputFormatDetailed
+	if err := settings.Validate(); err != nil {
+		t.Fatalf("detailed output format rejected: %v", err)
+	}
 	settings.Cloudflare.RecordType = "CNAME"
 	if err := settings.Validate(); err == nil {
 		t.Fatal("expected invalid record type")

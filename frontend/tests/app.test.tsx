@@ -27,17 +27,21 @@ describe("CF Node Bench workspace",()=>{
     await waitFor(()=>expect(screen.getByRole("button",{name:/开始测速/})).toBeInTheDocument());
     expect(screen.getByRole("heading",{name:"测速已取消"})).toBeInTheDocument();
     expect(screen.getByLabelText("测速阶段").children[0]).toHaveAttribute("data-state","cancelled");
-    expect(screen.getByLabelText("测速阶段").children[0]).toHaveTextContent("采样未保留");
+    expect(screen.getByLabelText("测速阶段").children[0]).toHaveTextContent("阶段未完成");
   });
 
-  it("shows a clear settings relationship error",async()=>{
+  it("allows a candidate batch smaller than the download target while enforcing the final result limit",async()=>{
     render(<App/>); await screen.findByRole("heading",{name:"测速工作台"});
     fireEvent.click(screen.getByRole("button",{name:"设置"}));
-    const tcp=await screen.findByLabelText("HTTP 候选池");
+    const tcp=await screen.findByLabelText("HTTP 候选批量");
     fireEvent.change(tcp,{target:{value:"10"}});
     fireEvent.change(screen.getByLabelText("带宽目标通过数"),{target:{value:"30"}});
     fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
-    expect(await screen.findByText("带宽目标通过数不能大于 HTTP 候选数")).toBeInTheDocument();
+    await waitFor(()=>expect(getAppState().settings.httpCandidateCount).toBe(10));
+    expect(getAppState().settings.bandwidthCandidates).toBe(30);
+    fireEvent.change(screen.getByLabelText("最终结果数"),{target:{value:"31"}});
+    fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
+    expect(await screen.findByText("最终结果数不能大于带宽目标通过数")).toBeInTheDocument();
   });
 
   it("shows advanced probe controls and rejects conflicting country filters",async()=>{
@@ -107,7 +111,7 @@ describe("CF Node Bench workspace",()=>{
     expect(screen.getByText("启用 Cloudflare 代理")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab",{name:"TXT 记录"}));
     expect(screen.queryByText("启用 Cloudflare 代理")).not.toBeInTheDocument();
-    expect(screen.getByText("104.18.1.20:443#US|HTTP44ms|186Mbps")).toBeInTheDocument();
+    expect(screen.getByText("104.18.1.20:443#US|44ms|186M")).toBeInTheDocument();
   });
 
   it("validates an enabled publish target before saving",async()=>{

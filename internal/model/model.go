@@ -30,6 +30,11 @@ type Candidate struct {
 	SourceID    string      `json:"sourceId,omitempty"`
 }
 
+type PinnedNode struct {
+	Mode      Mode      `json:"mode"`
+	Candidate Candidate `json:"candidate"`
+}
+
 func (c Candidate) Address() string {
 	if c.AddressType == AddressDomain {
 		return c.Host
@@ -117,6 +122,7 @@ type ScoreWeights struct {
 }
 
 type ProbeResult struct {
+	Pinned     bool             `json:"pinned,omitempty"`
 	Mode       Mode             `json:"mode,omitempty"`
 	QUIC       ProbeStats       `json:"quic"`
 	HTTP3      ProbeStats       `json:"http3"`
@@ -164,6 +170,7 @@ type StageQueue struct {
 }
 
 type RunProgress struct {
+	AvailableResults   int                   `json:"availableResults,omitempty"`
 	LocalFiles         bool                  `json:"localFiles,omitempty"`
 	Mode               Mode                  `json:"mode,omitempty"`
 	LogicalCandidates  int                   `json:"logicalCandidates,omitempty"`
@@ -179,6 +186,7 @@ type RunProgress struct {
 }
 
 type RunSummary struct {
+	PartialResults     bool                  `json:"partialResults,omitempty"`
 	LocalFiles         bool                  `json:"localFiles,omitempty"`
 	Mode               Mode                  `json:"mode,omitempty"`
 	WorkerHost         string                `json:"workerHost,omitempty"`

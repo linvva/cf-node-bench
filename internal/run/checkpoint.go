@@ -92,8 +92,8 @@ func checkpointWarnings(checkpoint Checkpoint, stage string, settings config.Set
 	}
 	if stage == StageBandwidth || stage == StageRanking {
 		previous := stageSettings(checkpoint, "https")
-		if previous.RequestTimeoutMS != settings.RequestTimeoutMS || previous.HTTPProbeCount != settings.HTTPProbeCount || previous.HTTPCandidateCount != settings.HTTPCandidateCount {
-			warnings = append(warnings, "HTTPS 测量或候选池设置已变化")
+		if previous.RequestTimeoutMS != settings.RequestTimeoutMS || previous.HTTPProbeCount != settings.HTTPProbeCount {
+			warnings = append(warnings, "HTTPS 测量设置已变化")
 		}
 	}
 	if stage == StageRanking {
@@ -406,7 +406,7 @@ func buildH3ResumeInfo(c Checkpoint, currentID string, settings config.Settings,
 			}
 			if definition.stage == StageBandwidth || definition.stage == StageRanking {
 				previous := stageSettings(c, StageHTTP3)
-				if previous.HTTPProbeCount != settings.HTTPProbeCount || previous.H3RequestTimeoutMS != settings.H3RequestTimeoutMS || previous.HTTPCandidateCount != settings.HTTPCandidateCount {
+				if previous.HTTPProbeCount != settings.HTTPProbeCount || previous.H3RequestTimeoutMS != settings.H3RequestTimeoutMS {
 					option.Warnings = append(option.Warnings, "HTTP/3 测量设置已变化")
 				}
 			}

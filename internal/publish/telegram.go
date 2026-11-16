@@ -61,18 +61,31 @@ func (s *Service) telegramRequest(ctx context.Context, settings Settings, method
 
 func telegramSummary(summary model.RunSummary, settings Settings, outcomes map[string]model.PublicationResult) string {
 	duration := summary.FinishedAt.Sub(summary.StartedAt)
+	failedPinned := 0
+	for _, result := range summary.Results {
+		if result.Pinned && result.Status == "failed_gate" {
+			failedPinned++
+		}
+	}
 	mode := "TCP/HTTPS"
 	if model.NormalizeMode(summary.Mode) == model.ModeH3 {
 		mode = "H3"
 	}
+	title := "CF Node Bench 测速完成"
+	if summary.State == "cancelled" && summary.PartialResults {
+		title = "CF Node Bench 测速已取消，已保留部分结果"
+	}
 	lines := []string{
-		"CF Node Bench 测速完成",
+		title,
 		"模式：" + mode,
 		fmt.Sprintf("耗时：%.1f 秒", duration.Seconds()),
-		fmt.Sprintf("通过节点：%d", len(summary.Results)),
+		fmt.Sprintf("通过节点：%d", len(summary.Results)-failedPinned),
 		"Cloudflare：" + targetSummary("cloudflare", settings.Cloudflare.Enabled, outcomes),
 		"GitHub 仓库：" + targetSummary("github", settings.GitHub.Enabled, outcomes),
 		"GitHub Gist：" + targetSummary("gist", settings.Gist.Enabled, outcomes),
+	}
+	if failedPinned > 0 {
+		lines = append(lines, fmt.Sprintf("固化保留（未通过）：%d", failedPinned))
 	}
 	return strings.Join(lines, "\n")
 }

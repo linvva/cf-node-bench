@@ -113,7 +113,13 @@ describe("shared publication and H3 requirement",()=>{
     expect(screen.getByLabelText("带宽新节点队列")).toHaveTextContent("累计安排：50待测：17在测：3新节点通过：18 / 30");
     expect(screen.getByRole("progressbar",{name:"带宽进度"})).toHaveAttribute("aria-valuenow","60");
     expect(screen.getByText("动态补测")).toBeInTheDocument();
-    Object.assign(download,{input:44,passed:30,failed:12,queue:{pool:200,target:30,planned:50,active:2,pending:0,passed:30}});
+    http.selected=350;
+    download.queue={pool:350,target:30,planned:250,active:3,pending:217,passed:18};
+    view.rerender(<RunWorkspace/>);
+    expect(screen.getByLabelText("候选路径")).toHaveTextContent(`350${mode==="h3"?"新节点入选":"HTTPS 入选"}`);
+    expect(screen.getByLabelText("带宽新节点队列")).toHaveTextContent("新节点候选池：350累计安排：250待测：217在测：3新节点通过：18 / 30");
+    expect(screen.queryByText("本轮候选已测完，未达到目标")).not.toBeInTheDocument();
+    Object.assign(download,{input:44,passed:30,failed:12,queue:{pool:350,target:30,planned:250,active:2,pending:0,passed:30}});
     view.rerender(<RunWorkspace/>);
     expect(screen.getByText("等待在测完成")).toBeInTheDocument();
     expect(screen.getByRole("progressbar",{name:"带宽进度"})).toHaveAttribute("aria-valuenow","100");
@@ -126,7 +132,7 @@ describe("shared publication and H3 requirement",()=>{
     Object.assign(download,{input:2,passed:2,failed:0,state:"completed",queue:{pool:2,target:30,planned:2,active:0,pending:0,passed:2}});
     view.rerender(<RunWorkspace/>);
     expect(screen.getByLabelText("带宽新节点队列")).toHaveTextContent("新节点通过：2 / 30");
-    expect(screen.getByText("候选已耗尽，未达到目标")).toBeInTheDocument();
+    expect(screen.getByText("本轮候选已测完，未达到目标")).toBeInTheDocument();
     expect(Number(screen.getByRole("progressbar",{name:"带宽进度"}).getAttribute("aria-valuenow"))).toBeCloseTo(2/30*100);
     expect(screen.queryByText("已达目标")).not.toBeInTheDocument();
   });

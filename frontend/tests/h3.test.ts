@@ -18,7 +18,7 @@ describe("unified H3 contract",()=>{
     expect(validateSettings({...defaultSettings,verificationHost:"https://worker.example.com/path"})).toContain("验证域名");
     expect(validateSettings({...defaultSettings,connectionConcurrency:0})).toContain("连接并发");
     expect(validateSettings({...defaultSettings,httpMinSuccessRate:0.5})).toContain("最低成功率");
-    expect(validateSettings({...defaultSettings,httpCandidateCount:10})).toContain("HTTP 候选数");
+    expect(validateSettings({...defaultSettings,httpCandidateCount:10})).toBe("");
   });
   it("copies original domains with genuine H3 metrics and exports the IPv4 snapshot",()=>{
     expect(formatCopyResults([result],{country:false,tcpLatency:true,httpLatency:true,bandwidth:true})).toBe("edge.example.com:8443#H3|QUIC51ms|HTTP344ms|80Mbps");

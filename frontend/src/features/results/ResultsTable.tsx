@@ -38,6 +38,9 @@ export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: 
   const settings = useAppStore((state) => state.settings);
   const isH3=summary?.mode==="h3",connectionLabel=isH3?"QUIC":"TCP",httpLabel=isH3?"HTTP/3":"HTTPS";
   const history = useAppStore((state) => state.history);
+  const pinnedNodes = useAppStore((state) => state.pinnedNodes);
+  const running = useAppStore((state) => state.running || state.preparingLocal || state.savingMode);
+  const [savingPin, setSavingPin] = useState(false);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("score");
   const [selected, setSelected] = useState<ProbeResult>();
@@ -53,6 +56,20 @@ export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: 
     [summary, query, sort],
   );
   const output = selectedKeys.size ? results.filter((item) => selectedKeys.has(keyOf(item))) : results;
+  const isPinned = (result: ProbeResult) => pinnedNodes?.some(node => node.mode === (summary?.mode ?? "tcp_https") && `${candidateAddress(node.candidate)}:${node.candidate.port}` === keyOf(result)) ?? false;
+  const togglePin = async (result: ProbeResult) => {
+    if (!summary) return;
+    const pinned = !isPinned(result);
+    setSavingPin(true);
+    try {
+      await actions.setNodePinned(summary.runId, keyOf(result), pinned);
+      toast.success(pinned ? "已固化，后续测速无论是否通过都会保留" : "已取消固化，后续测速按普通规则筛选");
+    } catch (reason) {
+      toast.danger(`保存失败：${String(reason)}`);
+    } finally {
+      setSavingPin(false);
+    }
+  };
   const copy = async () => {
     await navigator.clipboard.writeText(formatCopyResults(output, copyFields));
     toast.success(`已复制 ${output.length} 个节点`);
@@ -82,9 +99,10 @@ export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: 
   };
 
   return <section className="panel results-panel">
-    <div className="section-heading"><h2>测速结果{summary?` · ${isH3?"H3":"TCP/HTTPS"}${summary.localFiles?" · 本地文件":""}`:""}</h2><span>{summary?.state === "cancelled" ? "任务已取消" : summary ? `完成于 ${new Date(summary.finishedAt).toLocaleTimeString("zh-CN")}` : "等待首次测速"}</span></div>
-    {isH3&&<p className="h3-context">{results.length?"H3 入口已验证 · IPv4":"检测目标：H3 入口 · IPv4"}{summary?.workerHost?` · ${summary.workerHost}`:""}。域名按本轮全部解析 IP 的较差成绩排名；不代表完整 XHTTP、ECH 或 ProxyIP 出站已验证。</p>}
-    {summary?.state==="completed"&&<div className="publication-strip" aria-label="发布状态">{summary.publications.length?summary.publications.map(result=><div className="publication-item" key={result.target}><strong>{{cloudflare:"Cloudflare",github:"GitHub 仓库",gist:"Gist",telegram:"Telegram"}[result.target]}</strong><PublicationStatus result={result}/><span className="spacer"/><Button isIconOnly variant="tertiary" aria-label={`重试 ${result.target}`} isDisabled={result.state==="queued"||result.state==="running"} onPress={()=>void publish(result.target)}><RotateCw size={14}/></Button></div>):<><span className="results-summary">尚无发布记录</span><span className="spacer"/><Button variant="tertiary" onPress={()=>void publish("all")}><Send size={14}/>发布结果</Button></>}</div>}
+    <div className="section-heading"><h2>测速结果{summary?` · ${isH3?"H3":"TCP/HTTPS"}${summary.localFiles?" · 本地文件":""}`:""}</h2><span>{summary?.state === "cancelled" ? (summary.partialResults?`已取消，已保留部分结果 · ${summary.results.length} 个节点`:"任务已取消") : summary ? `完成于 ${new Date(summary.finishedAt).toLocaleTimeString("zh-CN")}` : "等待首次测速"}</span></div>
+    {isH3&&<p className="h3-context">{results.length?"H3 入口测量结果 · IPv4":"检测目标：H3 入口 · IPv4"}{summary?.workerHost?` · ${summary.workerHost}`:""}。域名按本轮全部解析 IP 的较差成绩排名；不代表完整 XHTTP、ECH 或 ProxyIP 出站已验证。</p>}
+    {summary?.results.length ? <p className="pinned-note">固化节点按普通 / H3 模式分别保存；后续测速绕过国家、端口和通过门槛，额外加入最终列表，不占候选池、带宽通过目标和最终结果名额。失败仍会保留。</p> : null}
+    {summary&&(summary.state==="completed"||(summary.state==="cancelled"&&summary.partialResults&&summary.results.length>0))&&<div className="publication-strip" aria-label="发布状态">{summary.publications.length?summary.publications.map(result=><div className="publication-item" key={result.target}><strong>{{cloudflare:"Cloudflare",github:"GitHub 仓库",gist:"Gist",telegram:"Telegram"}[result.target]}</strong><PublicationStatus result={result}/><span className="spacer"/><Button isIconOnly variant="tertiary" aria-label={`重试 ${result.target}`} isDisabled={result.state==="queued"||result.state==="running"} onPress={()=>void publish(result.target)}><RotateCw size={14}/></Button></div>):<><span className="results-summary">尚无发布记录</span><span className="spacer"/><Button variant="tertiary" onPress={()=>void publish("all")}><Send size={14}/>发布结果</Button></>}</div>}
     <div className="results-toolbar">
       <Input className="search" aria-label="筛选节点" placeholder="筛选 IP、域名、端口或国家" value={query} onChange={(event) => setQuery(event.target.value)} />
       <Button variant="secondary" onPress={() => setSort(sort === "score" ? "tcp" : sort === "tcp" ? "https" : sort === "https" ? "bandwidth" : "score")}>排序：{{ score: "综合分", tcp: `${connectionLabel} P95`, https: `${httpLabel} P95`, bandwidth: "带宽" }[sort]}</Button>
@@ -102,25 +120,27 @@ export const ResultsTable = memo(function ResultsTable({ summary }: { summary?: 
     {results.length ? <Table variant="secondary"><Table.ScrollContainer><Table.Content aria-label="Cloudflare 节点测速结果" selectionMode="multiple" selectedKeys={selectedKeys} onSelectionChange={(keys) => setSelectedKeys(keys === "all" ? new Set(results.map(keyOf)) : new Set([...keys].map(String)))}>
       <Table.Header>
         <Table.Column id="selection"><Checkbox slot="selection" aria-label="选择全部" isSelected={selectedKeys.size === results.length} isIndeterminate={selectedKeys.size > 0 && selectedKeys.size < results.length} onChange={(checked) => setSelectedKeys(checked ? new Set(results.map(keyOf)) : new Set())}><Checkbox.Control><Checkbox.Indicator /></Checkbox.Control></Checkbox></Table.Column>
-        <Table.Column id="ip" isRowHeader>{isH3?"地址 / 端口":"IP / 端口"}</Table.Column><Table.Column id="country">国家</Table.Column><Table.Column id="tcpSuccess">{`${connectionLabel} 成功`}</Table.Column><Table.Column id="tcpP50">{`${connectionLabel} P50`}</Table.Column><Table.Column id="tcpP95">{`${connectionLabel} P95`}</Table.Column><Table.Column id="httpsSuccess">{`${httpLabel} 成功`}</Table.Column><Table.Column id="http">{`${isH3?"HTTP/3":"HTTP"} 延迟`}</Table.Column><Table.Column id="jitter">抖动</Table.Column><Table.Column id="bandwidth">下载带宽</Table.Column><Table.Column id="score">综合分</Table.Column><Table.Column id="status">状态</Table.Column>
+        <Table.Column id="ip" isRowHeader>{isH3?"地址 / 端口":"IP / 端口"}</Table.Column><Table.Column id="country">国家</Table.Column><Table.Column id="tcpSuccess">{`${connectionLabel} 成功`}</Table.Column><Table.Column id="tcpP50">{`${connectionLabel} P50`}</Table.Column><Table.Column id="tcpP95">{`${connectionLabel} P95`}</Table.Column><Table.Column id="httpsSuccess">{`${httpLabel} 成功`}</Table.Column><Table.Column id="http">{`${isH3?"HTTP/3":"HTTP"} 延迟`}</Table.Column><Table.Column id="jitter">抖动</Table.Column><Table.Column id="bandwidth">下载带宽</Table.Column><Table.Column id="score">综合分</Table.Column><Table.Column id="status">本轮状态</Table.Column><Table.Column id="pinned">固化</Table.Column>
       </Table.Header>
       <Table.Body>{results.map((result) => <Table.Row id={keyOf(result)} key={keyOf(result)} onAction={() => setSelected(result)}>
         <Table.Cell><Checkbox slot="selection" aria-label={`选择 ${keyOf(result)}`}><Checkbox.Control><Checkbox.Indicator /></Checkbox.Control></Checkbox></Table.Cell>
-        <Table.Cell><span className="ip-cell">{keyOf(result)}</span></Table.Cell><Table.Cell>{result.candidate.country || "-"}</Table.Cell><Table.Cell>{percent(connectionStats(result).successRate)}</Table.Cell><Table.Cell>{ms(connectionStats(result).p50Ms)}</Table.Cell><Table.Cell>{ms(connectionStats(result).p95Ms)}</Table.Cell><Table.Cell>{percent(httpStats(result).successRate)}</Table.Cell><Table.Cell>{ms(httpStats(result).averageMs)}</Table.Cell><Table.Cell>{ms(httpStats(result).jitterMs)}</Table.Cell><Table.Cell><span className="metric-good">{result.bandwidth.mbps.toFixed(1)} Mbps</span></Table.Cell><Table.Cell><span className="metric-good">{result.score.toFixed(1)}</span></Table.Cell><Table.Cell><span className="status-pill">通过</span></Table.Cell>
+        <Table.Cell><span className="ip-cell">{keyOf(result)}</span></Table.Cell><Table.Cell>{result.candidate.country || "-"}</Table.Cell><Table.Cell>{percent(connectionStats(result).successRate)}</Table.Cell><Table.Cell>{ms(connectionStats(result).p50Ms)}</Table.Cell><Table.Cell>{ms(connectionStats(result).p95Ms)}</Table.Cell><Table.Cell>{percent(httpStats(result).successRate)}</Table.Cell><Table.Cell>{ms(httpStats(result).averageMs)}</Table.Cell><Table.Cell>{ms(httpStats(result).jitterMs)}</Table.Cell><Table.Cell><span className={result.bandwidth.failure ? "" : "metric-good"}>{result.bandwidth.mbps.toFixed(1)} Mbps</span></Table.Cell><Table.Cell><span className={result.status === "failed_gate" ? "" : "metric-good"}>{result.status === "failed_gate" ? "—" : result.score.toFixed(1)}</span></Table.Cell><Table.Cell><span className={`status-pill${result.status === "failed_gate" ? " status-failed" : ""}`}>{result.pinned ? "固化保留 · " : ""}{result.status === "failed_gate" ? "未通过" : "通过"}</span></Table.Cell>
+        <Table.Cell><Button variant="tertiary" size="sm" aria-label={`${isPinned(result) ? "取消固化" : "固化"} ${keyOf(result)}`} isDisabled={running || savingPin} onPress={() => void togglePin(result)}>{isPinned(result) ? "取消固化" : "固化"}</Button></Table.Cell>
       </Table.Row>)}</Table.Body>
     </Table.Content></Table.ScrollContainer></Table> : <div className="empty-results"><div><Search size={26} /><strong>{summary?.state === "cancelled" ? "测速已取消" : "暂无结果"}</strong><span>{summary ? "当前条件下没有合格节点" : "开始测速后，合格节点将直接显示在这里"}</span></div></div>}
     {selected && <Drawer isOpen onOpenChange={(open) => { if (!open) setSelected(undefined); }}><Drawer.Trigger className="sr-only" aria-label="节点明细"><span /></Drawer.Trigger><Drawer.Backdrop><Drawer.Content className="result-drawer" placement="right"><Drawer.Dialog><Drawer.Header><Drawer.Heading>{keyOf(selected)}</Drawer.Heading><Drawer.CloseTrigger aria-label="关闭"><X size={17} /></Drawer.CloseTrigger></Drawer.Header><Drawer.Body>
       <p className="source-meta">{selected.candidate.country || "未知国家"} · {selected.candidate.addressType.toUpperCase()} · {selected.candidate.sourceId}</p>
+      {selected.pinned && <p className="source-meta">本轮固化节点：{selected.status === "failed_gate" ? "测速未通过，仍保留在最终列表；没有合格评分。" : "测速通过，额外保留在最终列表。"}</p>}
       {selected.candidate.addressType!=="domain"&&<><SamplingNote label={connectionLabel} stats={connectionStats(selected)}/><SamplingNote label={httpLabel} stats={httpStats(selected)}/></>}
       <div className="drawer-grid"><Metric label={`${connectionLabel} 成功率`} value={percent(connectionStats(selected).successRate)} /><Metric label={`${connectionLabel} P50 / P95`} value={`${ms(connectionStats(selected).p50Ms)} / ${ms(connectionStats(selected).p95Ms)}`} /><Metric label={`${httpLabel} 成功率`} value={percent(httpStats(selected).successRate)} /><Metric label={`${isH3?"HTTP/3":"HTTP"} 平均延迟`} value={ms(httpStats(selected).averageMs)} /><Metric label={`${httpLabel} 抖动`} value={ms(httpStats(selected).jitterMs)} /><Metric label="下载带宽" value={`${selected.bandwidth.mbps.toFixed(1)} Mbps`} /><Metric label="首字节" value={ms(selected.bandwidth.ttfbMs)} /><Metric label="实际下载" value={`${(selected.bandwidth.bytes / 1048576).toFixed(1)} MiB`} /></div>
       {isH3&&<section className="endpoint-details" aria-label="逐 IP 检测明细"><h3>本轮 IPv4 明细</h3><p className="source-meta">{selected.candidate.addressType==="domain"?"DNS 解析时间：":"检测时间："}{selected.resolvedAt?new Date(selected.resolvedAt).toLocaleString("zh-CN"):"未记录"}。后续 DNS 变化及 IPv6 不在本轮验证范围内。</p>{selected.endpoints?.map(endpoint=><article key={endpoint.ip}><h4>{endpoint.ip}:{selected.candidate.port}</h4><SamplingNote label="QUIC" stats={endpoint.quic}/><SamplingNote label="HTTP/3" stats={endpoint.http3}/><div className="drawer-grid"><Metric label="QUIC 成功率" value={percent(endpoint.quic.successRate)}/><Metric label="QUIC P95" value={ms(endpoint.quic.p95Ms)}/><Metric label="HTTP/3 成功率" value={percent(endpoint.http3.successRate)}/><Metric label="HTTP/3 P95" value={ms(endpoint.http3.p95Ms)}/><Metric label="下载带宽" value={endpoint.bandwidth.mbps.toFixed(1)+" Mbps"}/><Metric label="实际下载" value={(endpoint.bandwidth.bytes/1048576).toFixed(1)+" MiB"}/></div></article>)}</section>}
-      <div className="score-breakdown"><h3>评分明细 · {selected.score.toFixed(1)}</h3>{([
+      {selected.status !== "failed_gate" && <div className="score-breakdown"><h3>评分明细 · {selected.score.toFixed(1)}</h3>{([
         [connectionLabel,isH3?selected.parts.quic??0:selected.parts.tcp,summary?connectionWeight(summary.scoreWeights,summary.mode):0],
         [httpLabel,isH3?selected.parts.http3??0:selected.parts.https,summary?httpWeight(summary.scoreWeights,summary.mode):0],
         ["抖动",selected.parts.jitter,summary?.scoreWeights.jitter??0],
         ["可用性",selected.parts.reliability,summary?.scoreWeights.reliability??0],
         ["带宽",selected.parts.bandwidth,summary?.scoreWeights.bandwidth??0],
-      ] as [string,number,number][]).map(([label,value,weight]) => <div className="score-row" key={label}><span>{label}</span><div className="score-track"><div className="score-fill" style={{ width: `${value}%` }} /></div><b>{value.toFixed(0)} × {weight}% = {(value*weight/100).toFixed(1)}</b></div>)}</div>
+      ] as [string,number,number][]).map(([label,value,weight]) => <div className="score-row" key={label}><span>{label}</span><div className="score-track"><div className="score-fill" style={{ width: `${value}%` }} /></div><b>{value.toFixed(0)} × {weight}% = {(value*weight/100).toFixed(1)}</b></div>)}</div>}
     </Drawer.Body></Drawer.Dialog></Drawer.Content></Drawer.Backdrop></Drawer>}
   </section>;
 });

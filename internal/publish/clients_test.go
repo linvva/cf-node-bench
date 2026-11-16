@@ -122,6 +122,24 @@ func TestTelegramIncludesModeInSummary(t *testing.T) {
 		if got := telegramSummary(summary, DefaultSettings(), nil); !strings.Contains(got, label) {
 			t.Fatalf("summary for %s has no mode label: %q", mode, got)
 		}
+		summary.State, summary.PartialResults = "cancelled", true
+		if got := telegramSummary(summary, DefaultSettings(), nil); !strings.Contains(got, label) || !strings.Contains(got, "测速已取消，已保留部分结果") || strings.Contains(got, "测速完成") {
+			t.Fatalf("retained cancellation was presented as a completed run: %q", got)
+		}
+	}
+}
+
+func TestFailedPinnedNodesRemainInOutputWithoutCountingAsPassed(t *testing.T) {
+	summary := testSummary()
+	failed := sampleResult("192.0.2.1", 443, "US")
+	failed.Pinned, failed.Status = true, "failed_gate"
+	summary.Results = append(summary.Results, failed)
+	message := telegramSummary(summary, DefaultSettings(), nil)
+	if !strings.Contains(message, fmt.Sprintf("通过节点：%d", len(summary.Results)-1)) || !strings.Contains(message, "固化保留（未通过）：1") {
+		t.Fatalf("failed pinned node counted as passed: %s", message)
+	}
+	if output := FormatResults(summary.Results, DefaultSettings().Output); !strings.Contains(output, "192.0.2.1:443") {
+		t.Fatal("failed pinned node omitted from published output")
 	}
 }
 
