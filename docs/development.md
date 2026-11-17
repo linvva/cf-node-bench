@@ -92,6 +92,8 @@ Tag Workflow 为 Windows、Linux、macOS 各发布 `amd64` 和 `arm64` 两种架
 
 手动下载与自更新使用同一文件。Release 另附 `update-manifest.json` 和 `SHA256SUMS.txt`，合计 8 个附件。清单包含各应用文件的 SHA-256 和 Ed25519 签名；客户端从 GitHub 的 latest Release 获取清单，再下载清单中指定版本和架构的文件。预发布不进入稳定版更新通道。许可证随前端嵌入应用，可在“设置”中离线查看。
 
+Release 更新说明由 Workflow 自动整理当前 Tag 与上一个可达的 `v*` Tag 之间的提交标题和正文，并附上下载指南及版本对比链接；首次发布使用当前版本的完整提交历史。正常维护中文 commit message 即可，无需另写 Release 正文。
+
 开发构建或未嵌入公钥时，更新界面显示不可用。不含自更新功能的旧版需要先手动下载安装。更新签名与 Windows Authenticode / Apple Developer ID 签名是独立机制。
 
 ## 项目结构

@@ -197,6 +197,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -219,10 +221,25 @@ jobs:
         working-directory: release-artifacts
         run: sha256sum CF-Node-Bench-* update-manifest.json > SHA256SUMS.txt
 
+      - name: Generate release notes from commits
+        shell: bash
+        run: |
+          previous_tag="$(git describe --tags --match 'v*' --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || true)"
+          range="$GITHUB_SHA"
+          if [[ -n "$previous_tag" ]]; then range="${previous_tag}..${GITHUB_SHA}"; fi
+          {
+            printf '## 更新内容\n\n'
+            git log --reverse --format='### %s%n%n%b' "$range" | sed -E '/^(### |$)/!s/^/- /'
+            printf '\n[下载与使用说明](https://github.com/%s/blob/%s/docs/usage.md)\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+            if [[ -n "$previous_tag" ]]; then
+              printf '\n**完整变更**：[%s…%s](https://github.com/%s/compare/%s...%s)\n' "$previous_tag" "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" "$previous_tag" "$GITHUB_REF_NAME"
+            fi
+          } > release-notes.md
+
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
           files: release-artifacts/*
-          generate_release_notes: true
+          body_path: release-notes.md
           fail_on_unmatched_files: true
           prerelease: ${{ contains(github.ref_name, '-') }}
