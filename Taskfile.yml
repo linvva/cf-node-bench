@@ -1,0 +1,91 @@
+version: '3'
+
+vars:
+  APP_NAME: CF-Node-Bench
+  BIN_DIR: build/bin
+  GOOS: '{{.GOOS | default OS}}'
+  VERSION: '{{.VERSION | default "dev"}}'
+  UPDATE_PUBLIC_KEY: '{{.UPDATE_PUBLIC_KEY | default ""}}'
+  BUILD_TAGS: '{{if eq .DEV "true"}}dev{{else}}production{{end}}'
+  LDFLAGS: '-s -w -X main.buildVersion={{.VERSION}} -X main.updatePublicKey={{.UPDATE_PUBLIC_KEY}}'
+
+tasks:
+  build:
+    cmds:
+      - task: 'build:{{.GOOS}}'
+
+  frontend:
+    run: once
+    cmds:
+      - wails3 generate bindings -ts -i -clean=true
+      - pnpm build
+
+  icons:
+    run: once
+    cmds:
+      - wails3 generate icons -input build/appicon.png -windowsfilename build/windows/icon.ico -macfilename build/darwin/icons.icns
+
+  build:linux:
+    deps: [frontend]
+    cmds:
+      - go build -tags '{{.BUILD_TAGS}}' -trimpath -ldflags '{{.LDFLAGS}}' -o '{{.BIN_DIR}}/{{.APP_NAME}}' .
+    env:
+      GOOS: linux
+      GOARCH: '{{.ARCH | default ARCH}}'
+      CGO_ENABLED: '1'
+
+  build:windows:
+    deps: [frontend, icons]
+    cmds:
+      - wails3 generate syso -arch '{{.ARCH | default ARCH}}' -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info build/windows/info.json -out wails_windows_{{.ARCH | default ARCH}}.syso
+      - defer: {task: clean:syso}
+      - go build -tags '{{.BUILD_TAGS}}' -trimpath -ldflags '{{.LDFLAGS}}{{if ne .DEV "true"}} -H windowsgui{{end}}' -o '{{.BIN_DIR}}/{{.APP_NAME}}.exe' .
+    env:
+      GOOS: windows
+      GOARCH: '{{.ARCH | default ARCH}}'
+      CGO_ENABLED: '0'
+
+  clean:syso:
+    cmds:
+      - cmd: powershell -NoProfile -Command "Remove-Item wails_windows_*.syso -ErrorAction SilentlyContinue"
+        platforms: [windows]
+      - cmd: rm -f wails_windows_*.syso
+        platforms: [linux, darwin]
+
+  build:darwin:
+    deps: [frontend, icons]
+    cmds:
+      - go build -tags '{{.BUILD_TAGS}}' -trimpath -ldflags '{{.LDFLAGS}}' -o '{{.BIN_DIR}}/{{.APP_NAME}}' .
+    env:
+      GOOS: darwin
+      GOARCH: '{{.ARCH | default ARCH}}'
+      CGO_ENABLED: '1'
+      CGO_CFLAGS: '-mmacosx-version-min=12.0'
+      CGO_LDFLAGS: '-mmacosx-version-min=12.0'
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+
+  bundle:darwin:
+    deps: [icons]
+    cmds:
+      - rm -rf '{{.BIN_DIR}}/{{.APP_NAME}}.app'
+      - mkdir -p '{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS' '{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources'
+      - cp '{{.BIN_DIR}}/{{.APP_NAME}}' '{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS/'
+      - cp build/darwin/Info.plist '{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/'
+      - cp build/darwin/icons.icns '{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/'
+      - codesign --force --deep --sign - '{{.BIN_DIR}}/{{.APP_NAME}}.app'
+      - codesign --verify --deep --strict '{{.BIN_DIR}}/{{.APP_NAME}}.app'
+
+  dev:
+    cmds:
+      - wails3 dev -config build/config.yml -port 34115
+
+  dev:frontend:
+    cmds:
+      - pnpm --dir frontend dev --port 34115 --strictPort
+
+  run:
+    cmds:
+      - cmd: '{{.BIN_DIR}}/{{.APP_NAME}}.exe'
+        platforms: [windows]
+      - cmd: '{{.BIN_DIR}}/{{.APP_NAME}}'
+        platforms: [linux, darwin]

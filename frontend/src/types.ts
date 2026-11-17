@@ -37,4 +37,6 @@ export interface PublishSettingsView { output: PublishOutputFields; request: Pub
 export interface PublishSaveRequest { testMode?: Mode; settings: PublishSettingsView; cloudflareToken: string; githubToken: string; gistToken: string; telegramBotToken: string; telegramRelayKey: string }
 export interface HTTPSource { id: string; name: string; url: string; enabled: boolean; lastFetched?: string; lastStatus?: string; nodeCount: number }
 export interface NetworkInfo { interface: string; ipv4: string; status: string }
-export interface Bootstrap { pinnedNodes?: PinnedNode[]; migrationNotice?: string; settings: Settings; publishSettings: PublishSettingsView; sources: HTTPSource[]; history: RunSummary[]; network: NetworkInfo; currentRunId?: string; currentResultRunId?: string; resume: ResumeInfo }
+export interface Bootstrap { version?: string; pinnedNodes?: PinnedNode[]; migrationNotice?: string; settings: Settings; publishSettings: PublishSettingsView; sources: HTTPSource[]; history: RunSummary[]; network: NetworkInfo; currentRunId?: string; currentResultRunId?: string; resume: ResumeInfo }
+
+export interface UpdateState { currentVersion:string; status:"idle"|"checking"|"available"|"downloading"|"ready"|"error"|"unavailable"; version?:string; notes?:string; size?:number; downloaded?:number; error?:string }

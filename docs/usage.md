@@ -4,13 +4,29 @@
 
 ## 下载与运行
 
-从 [Releases](https://github.com/linvva/cf-node-bench/releases) 选择适合系统的压缩包，解压后运行应用。校验文件随下载资源提供。
+从 [Releases](https://github.com/linvva/cf-node-bench/releases) 选择适合系统和 CPU 架构的文件。文件名统一以 `CF-Node-Bench-<tag>-` 开头，`<tag>` 是版本标签；以下表格列出后缀。
 
-| 系统 | 运行要求 |
-| --- | --- |
-| Windows | 需要 WebView2 Runtime |
-| macOS | 如系统提示应用未签名，可在 Finder 中右键选择“打开” |
-| Linux | 需要 GTK 与 WebKitGTK 桌面运行库 |
+| 系统 | CPU 架构 | 文件后缀 |
+| --- | --- | --- |
+| Windows | Intel / AMD 64 位 | `windows-amd64.exe` |
+| Windows | ARM64 | `windows-arm64.exe` |
+| Linux | Intel / AMD 64 位 | `linux-amd64` |
+| Linux | ARM64 | `linux-arm64` |
+| macOS | Intel | `macos-amd64.zip` |
+| macOS | Apple Silicon（M 系列） | `macos-arm64.zip` |
+
+Windows 文件无需解压，双击运行；需要 WebView2 Runtime。macOS 文件解压后打开 `CF-Node-Bench.app`，需要 macOS 12 或更高版本；如系统提示应用未签名，可在 Finder 中右键选择“打开”。
+
+Linux 文件没有扩展名，需要 GTK4 与 WebKitGTK 6.0 桌面运行库。首次运行时在下载目录添加执行权限，再启动应用。将下面的 `<tag>` 替换为实际版本标签；ARM64 设备将 `amd64` 改为 `arm64`：
+
+```bash
+chmod +x './CF-Node-Bench-<tag>-linux-amd64'
+'./CF-Node-Bench-<tag>-linux-amd64'
+```
+
+Release 共提供 6 个应用文件，以及 `update-manifest.json` 和 `SHA256SUMS.txt`。后者可用于核对下载文件的 SHA-256。许可证可在应用“设置”中离线查看。
+
+在“设置 → 应用更新”或侧栏版本入口检查新版本。点击“下载更新”，等待校验完成后选择“重启并更新”；测速或发布任务结束后才能重启。更新需要程序所在目录可写。不含自更新功能的旧版需要先手动下载，手动安装与应用内更新使用同一文件。
 
 ## 添加节点
 
@@ -73,7 +89,7 @@ HTTP 阶段检测全部连接合格的新节点，再按成功率和延迟排序
 
 ### 固化节点
 
-在结果表中点击“固化”或“取消固化”，配置按普通 / H3 模式分别保存，重启应用后仍有效。
+在结果表中点击节点地址旁的图钉可固化或取消固化，点亮表示已固化。配置按普通 / H3 模式分别保存，重启应用后仍有效。
 
 固化节点即使不再出现在数据源中，也会额外带入测速。它们绕过国家、端口和测速通过门槛，更新测量信息后加入最终列表，不占新节点候选池、带宽通过目标或最终结果名额。未达标时显示“固化保留 · 未通过”，不显示有效评分；复制、导出和发布仍包含该节点。测速中不能更改固化配置。
 

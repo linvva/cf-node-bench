@@ -1,5 +1,5 @@
+import { installNative } from "./native";
 import { expect, test } from "@playwright/test";
-import type { RunProgress } from "../src/types";
 
 for(const mode of ["tcp_https","h3"] as const)test(`HTTP batches continue until the download target in ${mode}`,async({page},testInfo)=>{
   await page.goto("/");
@@ -29,11 +29,19 @@ for(const mode of ["tcp_https","h3"] as const)test(`pins survive the next run ou
   await page.getByRole("button",{name:"开始测速",exact:true}).click();
   const pin=page.getByRole("button",{name:/^固化 /}).first();
   await expect(pin).toBeVisible({timeout:8000});
+  await expect(pin).toHaveAttribute("aria-pressed","false");
+  await expect(page.getByRole("columnheader",{name:"固化",exact:true})).toHaveCount(0);
+  await pin.hover();
+  await expect(page.getByRole("tooltip")).toContainText("后续测速失败也保留");
   const label=(await pin.getAttribute("aria-label"))!;
   const key=label.slice("固化 ".length);
+  await expect(page.getByRole("rowheader").filter({has:page.getByRole("button",{name:label,exact:true})})).toHaveCount(1);
   await pin.click();
   const unpin=page.getByRole("button",{name:`取消固化 ${key}`,exact:true});
   await expect(unpin).toBeVisible();
+  await expect(unpin).toHaveAttribute("aria-pressed","true");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator(".results-toolbar .results-summary")).toHaveText("15 个节点");
   await page.getByRole("button",{name:"开始测速",exact:true}).click();
   await expect(unpin).toBeDisabled();
   await expect(page.getByRole("button",{name:"开始测速",exact:true})).toBeVisible({timeout:8000});
@@ -41,23 +49,25 @@ for(const mode of ["tcp_https","h3"] as const)test(`pins survive the next run ou
   await expect(row).toContainText("固化保留 · 通过");
   await expect(page.locator(".status-pill")).toHaveCount(16);
   await expect(unpin).toBeEnabled();
+  await unpin.hover();
+  await expect(page.getByRole("tooltip")).toContainText("已固化保留，点击取消");
+  await page.locator(".results-panel .section-heading h2").hover();
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
   await page.screenshot({path:testInfo.outputPath("pinned-results.png")});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBe(0);
-  await unpin.click();
+  await unpin.focus();
+  await unpin.press("Space");
   await expect(page.getByRole("button",{name:label,exact:true})).toBeVisible();
+  await expect(page.getByRole("button",{name:label,exact:true})).toHaveAttribute("aria-pressed","false");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
 for(const mode of ["tcp_https","h3"] as const)test(`HTTP selection and download queues remain clear in ${mode}`,async({page},testInfo)=>{
-  await page.addInitScript(()=>{
-    window.runtime={EventsOn:(name,handler)=>{
-      if(name==="run:progress")(window as typeof window&{__queueProgress?:(value:RunProgress)=>void}).__queueProgress=handler;
-      return ()=>{};
-    }};
-  });
+  await installNative(page);
   await page.goto("/");
   await expect(page.getByRole("heading",{name:"测速工作台"})).toBeVisible();
   await page.evaluate(mode=>{
-    (window as typeof window&{__queueProgress?:(value:RunProgress)=>void}).__queueProgress?.({runId:"queue",mode,state:"running",startedAt:new Date().toISOString(),stages:[
+    window.__emitNative("run:progress",{runId:"queue",mode,state:"running",startedAt:new Date().toISOString(),stages:[
       {name:mode==="h3"?"http3":"https",input:500,passed:350,failed:150,selected:200,durationMs:5000,state:"completed"},
       {name:"bandwidth",input:33,passed:18,failed:12,attemptsCompleted:30,attemptsTotal:33,durationMs:10000,state:"running",queue:{pool:200,target:30,planned:50,active:3,pending:17,passed:18}},
     ],failures:{}});
@@ -72,18 +82,13 @@ for(const mode of ["tcp_https","h3"] as const)test(`HTTP selection and download 
 });
 
 test("early failed probes show skipped work without inflating executed attempts",async({page},testInfo)=>{
-  await page.addInitScript(()=>{
-    window.runtime={EventsOn:(name,handler)=>{
-      if(name==="run:progress")(window as typeof window&{__probeProgress?:(value:RunProgress)=>void}).__probeProgress=handler;
-      return ()=>{};
-    }};
-  });
+  await installNative(page);
   await page.goto("/");
   await expect(page.getByRole("heading",{name:"测速工作台"})).toBeVisible();
   await page.getByRole("tab",{name:"H3",exact:true}).click();
   await expect(page.getByRole("tab",{name:"H3",exact:true})).toHaveAttribute("aria-selected","true");
   const update=async(completed:number,state:"running"|"completed")=>page.evaluate(({completed,state})=>{
-    (window as typeof window&{__probeProgress?:(value:RunProgress)=>void}).__probeProgress?.({runId:"early-stop",mode:"h3",state,startedAt:new Date().toISOString(),stages:[{name:"quic",input:3,passed:0,failed:completed,attemptsCompleted:completed,attemptsSkipped:completed*2,attemptsTotal:9,durationMs:2000,state}],failures:{quic_timeout:completed}});
+    window.__emitNative("run:progress",{runId:"early-stop",mode:"h3",state,startedAt:new Date().toISOString(),stages:[{name:"quic",input:3,passed:0,failed:completed,attemptsCompleted:completed,attemptsSkipped:completed*2,attemptsTotal:9,durationMs:2000,state}],failures:{quic_timeout:completed}});
   },{completed,state});
   await update(2,"running");
   await expect(page.getByLabel("当前测速进度")).toContainText("2 / 9 次探测 · 提前跳过 4 次");

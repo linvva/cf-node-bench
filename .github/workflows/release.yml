@@ -1,4 +1,4 @@
-name: Release portable builds
+name: Release applications
 
 on:
   push:
@@ -14,7 +14,8 @@ concurrency:
 
 env:
   NODE_VERSION: "24"
-  WAILS_VERSION: "v2.13.0"
+  WAILS_VERSION: "v3.1.0"
+  UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
 
 jobs:
   quality:
@@ -27,7 +28,7 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -48,8 +49,17 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate update public key
+        run: node -e 'if (Buffer.from(process.env.UPDATE_PUBLIC_KEY || "", "base64").length !== 32) throw new Error("Configure the UPDATE_PUBLIC_KEY repository variable before releasing")'
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}
+
+      - name: Generate desktop bindings
+        run: wails3 generate bindings -ts -i -clean=true
+
       - name: Run Go tests
-        run: go test -tags webkit2_41 ./...
+        run: go test ./...
 
       - name: Run frontend tests
         run: pnpm test
@@ -67,30 +77,36 @@ jobs:
         run: pnpm test:e2e
 
   build:
-    name: Build ${{ matrix.name }}
+    name: Build ${{ matrix.goos }}/${{ matrix.arch }}
     needs: quality
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Windows amd64
-            id: windows-amd64
-            os: windows-latest
-            platform: windows/amd64
-            output: CF-Node-Bench.exe
-            suffix: windows-amd64.zip
-          - name: Linux amd64
-            id: linux-amd64
-            os: ubuntu-24.04
-            platform: linux/amd64
-            output: CF-Node-Bench
-            suffix: linux-amd64.tar.gz
-          - name: macOS universal
-            id: macos-universal
-            os: macos-latest
-            platform: darwin/universal
-            output: CF-Node-Bench
-            suffix: macos-universal.zip
+          - os: windows-2025
+            goos: windows
+            arch: amd64
+            suffix: windows-amd64.exe
+          - os: windows-11-arm
+            goos: windows
+            arch: arm64
+            suffix: windows-arm64.exe
+          - os: ubuntu-24.04
+            goos: linux
+            arch: amd64
+            suffix: linux-amd64
+          - os: ubuntu-24.04-arm
+            goos: linux
+            arch: arm64
+            suffix: linux-arm64
+          - os: macos-15-intel
+            goos: darwin
+            arch: amd64
+            suffix: macos-amd64.zip
+          - os: macos-15
+            goos: darwin
+            arch: arm64
+            suffix: macos-arm64.zip
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out source
@@ -100,7 +116,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -122,54 +138,52 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}
 
-      - name: Build Linux application
-        if: runner.os == 'Linux'
-        run: wails build -clean -trimpath -platform "${{ matrix.platform }}" -tags webkit2_41 -o "${{ matrix.output }}"
+      - name: Set executable version metadata
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const version = process.env.GITHUB_REF_NAME.replace(/^v/, '').split('-')[0];
+          if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Invalid release tag');
+          const path = 'build/windows/info.json';
+          const info = JSON.parse(fs.readFileSync(path, 'utf8'));
+          info.fixed.file_version = info.fixed.product_version = version;
+          info.info['0409'].FileVersion = info.info['0409'].ProductVersion = version;
+          fs.writeFileSync(path, JSON.stringify(info));
+          for (const [file, pattern, value] of [
+            ['build/windows/wails.exe.manifest', /(<assemblyIdentity[^>]*\bversion=")[^"]+/, `${version}.0`],
+            ['build/darwin/Info.plist', /(<key>CFBundle(?:ShortVersionString|Version)<\/key>\s*<string>)[^<]+/g, version],
+          ]) fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(pattern, (_match, prefix) => prefix + value));
+          NODE
 
       - name: Build application
-        if: runner.os != 'Linux'
-        run: wails build -clean -trimpath -platform "${{ matrix.platform }}" -o "${{ matrix.output }}"
+        shell: bash
+        run: wails3 build GOOS=${{ matrix.goos }} GOARCH=${{ matrix.arch }} VERSION="${GITHUB_REF_NAME#v}"
 
-      - name: Package Windows application
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $package = "release/CF-Node-Bench-$env:GITHUB_REF_NAME-windows-amd64"
-          $archive = "$package.zip"
-          New-Item -ItemType Directory -Force -Path $package | Out-Null
-          Copy-Item "build/bin/CF-Node-Bench.exe" "$package/CF-Node-Bench.exe"
-          Copy-Item "frontend/public/THIRD_PARTY_NOTICES.md" $package
-          Copy-Item "frontend/public/licenses" "$package/licenses" -Recurse
-          Compress-Archive -Path $package -DestinationPath $archive
-
-      - name: Package Linux application
-        if: runner.os == 'Linux'
+      - name: Verify architecture and prepare release file
         shell: bash
         run: |
-          package="release/CF-Node-Bench-${GITHUB_REF_NAME}-linux-amd64"
-          mkdir -p "$package"
-          install -m 755 "build/bin/CF-Node-Bench" "$package/CF-Node-Bench"
-          cp "frontend/public/THIRD_PARTY_NOTICES.md" "$package/"
-          cp -R "frontend/public/licenses" "$package/licenses"
-          tar -C release -czf "${package}.tar.gz" "$(basename "$package")"
+          binary="build/bin/CF-Node-Bench${{ matrix.goos == 'windows' && '.exe' || '' }}"
+          info="$(go version -m "$binary")"
+          [[ "$info" == *"GOOS=${{ matrix.goos }}"* ]]
+          [[ "$info" == *"GOARCH=${{ matrix.arch }}"* ]]
+          mkdir -p release
+          output="release/CF-Node-Bench-${GITHUB_REF_NAME}-${{ matrix.suffix }}"
+          if [[ '${{ matrix.goos }}' == darwin ]]; then
+            [[ "$(lipo -archs "$binary")" == '${{ matrix.arch == 'amd64' && 'x86_64' || 'arm64' }}' ]]
+            wails3 task bundle:darwin
+            ditto -c -k --norsrc --noextattr --keepParent build/bin/CF-Node-Bench.app "$output"
+            [[ "$(zipinfo -1 "$output" | cut -d/ -f1 | sort -u)" == 'CF-Node-Bench.app' ]]
+          else
+            cp "$binary" "$output"
+          fi
 
-      - name: Package macOS application
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          package="release/CF-Node-Bench-${GITHUB_REF_NAME}-macos-universal"
-          mkdir -p "$package"
-          cp -R "build/bin/CF-Node-Bench.app" "$package/"
-          cp "frontend/public/THIRD_PARTY_NOTICES.md" "$package/"
-          cp -R "frontend/public/licenses" "$package/licenses"
-          ditto -c -k --sequesterRsrc --keepParent "$package" "${package}.zip"
-
-      - name: Upload portable archive
+      - name: Upload release file
         uses: actions/upload-artifact@v7
         with:
-          name: release-${{ matrix.id }}
+          name: release-${{ matrix.goos }}-${{ matrix.arch }}
           path: release/CF-Node-Bench-${{ github.ref_name }}-${{ matrix.suffix }}
           if-no-files-found: error
           compression-level: 0
@@ -181,16 +195,29 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download portable archives
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Download release files
         uses: actions/download-artifact@v7
         with:
           path: release-artifacts
           pattern: release-*
           merge-multiple: true
 
+      - name: Sign release files and generate manifest
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: go run ./cmd/updatemanifest -dir release-artifacts -version "$GITHUB_REF_NAME" -repository "$GITHUB_REPOSITORY"
+
       - name: Generate SHA-256 checksums
         working-directory: release-artifacts
-        run: sha256sum CF-Node-Bench-* > SHA256SUMS.txt
+        run: sha256sum CF-Node-Bench-* update-manifest.json > SHA256SUMS.txt
 
       - name: Publish release
         uses: softprops/action-gh-release@v3
@@ -198,3 +225,4 @@ jobs:
           files: release-artifacts/*
           generate_release_notes: true
           fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

@@ -4,7 +4,7 @@ import { CheckCircle2, Cloud, Code2, Copy, ExternalLink, FileText, GitBranch, Me
 import { actions, useAppStore } from "../../store";
 import type { Mode, PublicationResult, PublishCredentialTarget, PublishOutputFields, PublishSaveRequest, PublishSettingsView, PublishTarget } from "../../types";
 import { ProtocolTabs } from "../ProtocolTabs";
-import { publishSettingsForMode, publishTargetConfigured } from "../../lib/bridge";
+import { bridge, publishSettingsForMode, publishTargetConfigured } from "../../lib/bridge";
 import workerSource from "../../../../deploy/telegram-relay/worker.js?raw";
 
 const labels:Record<PublishTarget,string>={cloudflare:"Cloudflare",github:"GitHub 仓库",gist:"GitHub Gist",telegram:"Telegram"};
@@ -212,7 +212,7 @@ export function PublicationStatus({result}:{result:PublicationResult}){
     try{await navigator.clipboard.writeText(latestGistRawURL(result.url));toast.success("已复制固定 Raw 地址；它始终指向 Gist 最新内容，更新后可能有短暂缓存");}
     catch(reason){toast.danger(`复制失败：${String(reason)}`);}
   };
-  return <span className={`publication-state ${result.state}`}><span className="publication-state-text" title={result.message}>{description}</span>{result.url&&<><a className="publication-raw-link" href={result.url} target="_blank" rel="noreferrer" aria-label="打开 Gist Raw 文件" onClick={event=>{if(window.runtime?.BrowserOpenURL){event.preventDefault();window.runtime.BrowserOpenURL(result.url!);}}}><ExternalLink size={11}/>Raw</a><span title="复制固定 Raw 地址"><Button className="publication-raw-copy" isIconOnly variant="tertiary" aria-label="复制固定 Gist Raw 地址" onPress={()=>void copyRawURL()}><Copy size={11}/></Button></span></>}</span>;
+  return <span className={`publication-state ${result.state}`}><span className="publication-state-text" title={result.message}>{description}</span>{result.url&&<><a className="publication-raw-link" href={result.url} target="_blank" rel="noreferrer" aria-label="打开 Gist Raw 文件" onClick={event=>{event.preventDefault();openExternal(result.url!);}}><ExternalLink size={11}/>Raw</a><span title="复制固定 Raw 地址"><Button className="publication-raw-copy" isIconOnly variant="tertiary" aria-label="复制固定 Gist Raw 地址" onPress={()=>void copyRawURL()}><Copy size={11}/></Button></span></>}</span>;
 }
 
 export function latestGistRawURL(rawURL:string){
@@ -250,8 +250,7 @@ function Check({label,selected,onChange}:{label:string;selected:boolean;onChange
 }
 
 function openExternal(url:string){
-  if(window.runtime?.BrowserOpenURL)window.runtime.BrowserOpenURL(url);
-  else window.open(url,"_blank","noopener,noreferrer");
+  void bridge.openURL(url).catch(error=>toast.danger(`打开链接失败：${String(error)}`));
 }
 
 function CloudflareGuide({onClose}:{onClose:()=>void}){

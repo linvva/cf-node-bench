@@ -1,3 +1,4 @@
+import { clearNative, mockNative, type NativeApp } from "./native";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { toast } from "@heroui/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,10 +8,10 @@ const stats={attempts:3,successes:3,successRate:1,averageMs:20,p50Ms:18,p95Ms:24
 const result:ProbeResult={candidate:{addressType:"ipv4",ip:"192.0.2.1",port:443,country:"US"},tcp:stats,https:stats,bandwidth:{bytes:1048576,ttfbMs:20,durationMs:100,mbps:80},score:90,parts:{tcp:90,https:90,jitter:90,reliability:100,bandwidth:90},status:"qualified"};
 let data:Bootstrap;
 let events:Record<string,(value:unknown)=>void>;
-let api:NonNullable<NonNullable<NonNullable<Window["go"]>["main"]>["App"]>;
+let api:NativeApp;
 
-beforeEach(()=>{vi.resetModules();events={};delete window.go;delete window.runtime;});
-afterEach(()=>{cleanup();delete window.go;delete window.runtime;vi.useRealTimers();vi.restoreAllMocks();});
+beforeEach(()=>{vi.resetModules();events={};clearNative();});
+afterEach(()=>{cleanup();clearNative();vi.useRealTimers();vi.restoreAllMocks();});
 
 async function nativeResults(failed=false){
   const {defaultSettings,defaultPublishSettings}=await import("../src/lib/bridge");
@@ -22,8 +23,7 @@ async function nativeResults(failed=false){
     data.pinnedNodes=nodes;
     return nodes;
   })} as unknown as typeof api;
-  window.go={main:{App:api}};
-  window.runtime={EventsOn:(name,handler)=>{events[name]=handler;return ()=>{};}};
+  mockNative(api,events);
   const {actions}=await import("../src/store");
   await actions.init();
   const {ResultsTable}=await import("../src/features/results/ResultsTable");
@@ -34,17 +34,18 @@ async function nativeResults(failed=false){
 describe("pinned result controls",()=>{
   it("saves and removes a pin independently of the other mode and reports failed saves",async()=>{
     await nativeResults();
+    expect(screen.getByRole("button",{name:"固化 192.0.2.1:443"})).toHaveAttribute("aria-pressed","false");
     fireEvent.click(screen.getByRole("button",{name:"固化 192.0.2.1:443"}));
-    await screen.findByRole("button",{name:"取消固化 192.0.2.1:443"});
+    expect(await screen.findByRole("button",{name:"取消固化 192.0.2.1:443"})).toHaveAttribute("aria-pressed","true");
     expect(api.SetNodePinned).toHaveBeenCalledExactlyOnceWith("ordinary","192.0.2.1:443",true);
     expect(data.pinnedNodes).toHaveLength(2);
     const danger=vi.spyOn(toast,"danger");
     vi.mocked(api.SetNodePinned).mockRejectedValueOnce(new Error("disk full"));
     fireEvent.click(screen.getByRole("button",{name:"取消固化 192.0.2.1:443"}));
     await waitFor(()=>expect(danger).toHaveBeenCalledWith(expect.stringContaining("disk full")));
-    expect(screen.getByRole("button",{name:"取消固化 192.0.2.1:443"})).toBeInTheDocument();
+    expect(screen.getByRole("button",{name:"取消固化 192.0.2.1:443"})).toHaveAttribute("aria-pressed","true");
     fireEvent.click(screen.getByRole("button",{name:"取消固化 192.0.2.1:443"}));
-    await screen.findByRole("button",{name:"固化 192.0.2.1:443"});
+    expect(await screen.findByRole("button",{name:"固化 192.0.2.1:443"})).toHaveAttribute("aria-pressed","false");
     expect(data.pinnedNodes).toEqual([{mode:"h3",candidate:result.candidate}]);
   });
 

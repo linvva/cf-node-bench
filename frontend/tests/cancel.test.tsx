@@ -1,3 +1,4 @@
+import { clearNative, mockNative, type NativeApp } from "./native";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "@heroui/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,18 +8,17 @@ const stats={attempts:3,successes:3,successRate:1,averageMs:20,p50Ms:18,p95Ms:24
 const result:ProbeResult={candidate:{addressType:"ipv4",ip:"192.0.2.1",port:443,country:"US"},tcp:stats,https:stats,bandwidth:{bytes:1048576,ttfbMs:20,durationMs:100,mbps:80},score:90,parts:{tcp:90,https:90,jitter:90,reliability:100,bandwidth:90},status:"qualified"};
 let data:Bootstrap;
 let events:Record<string,(value:unknown)=>void>;
-let api:NonNullable<NonNullable<NonNullable<Window["go"]>["main"]>["App"]>;
+let api:NativeApp;
 
-beforeEach(()=>{vi.resetModules();events={};delete window.go;delete window.runtime;});
-afterEach(()=>{cleanup();delete window.go;delete window.runtime;vi.useRealTimers();vi.restoreAllMocks();});
+beforeEach(()=>{vi.resetModules();events={};clearNative();});
+afterEach(()=>{cleanup();clearNative();vi.useRealTimers();vi.restoreAllMocks();});
 
 async function workspace(availableResults=2){
   const {defaultSettings,defaultPublishSettings}=await import("../src/lib/bridge");
   const previous:RunSummary={runId:"previous",mode:"tcp_https",startedAt:new Date().toISOString(),finishedAt:new Date().toISOString(),state:"completed",results:[result],failures:{},publications:[],scoreWeights:defaultSettings.scoreWeights,reusedStages:[]};
   data={settings:structuredClone(defaultSettings),publishSettings:structuredClone(defaultPublishSettings),sources:[],history:[previous],network:{interface:"test",ipv4:"",status:"online"},resume:{options:[]}};
   api={Bootstrap:vi.fn(async()=>data),StartRun:vi.fn(async()=>"next"),CancelRun:vi.fn(async()=>true),CancelRunWithResults:vi.fn(async()=>true),PublishRun:vi.fn(async()=>{})} as unknown as typeof api;
-  window.go={main:{App:api}};
-  window.runtime={EventsOn:(name,handler)=>{events[name]=handler;return ()=>{};}};
+  mockNative(api,events);
   const {actions}=await import("../src/store");
   await actions.init();
   const {RunWorkspace}=await import("../src/features/run/RunWorkspace");

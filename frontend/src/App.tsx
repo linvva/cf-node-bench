@@ -3,7 +3,7 @@ import { Button, toast } from "@heroui/react";
 import { Activity, Database, Moon, Send, Settings, Sun, SunMoon, Upload } from "lucide-react";
 import appIcon from "../../build/appicon.png";
 import { actions, useAppStore } from "./store";
-import { bridge } from "./lib/bridge";
+import { bridge, isDesktop } from "./lib/bridge";
 import { RunWorkspace } from "./features/run/RunWorkspace";
 import { SourcesPage } from "./features/sources/SourcesPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
@@ -14,6 +14,9 @@ type Theme="system"|"light"|"dark";
 
 export function App(){
   const ready=useAppStore(state=>state.ready);
+  const startupError=useAppStore(state=>state.startupError);
+  const version=useAppStore(state=>state.version);
+  const update=useAppStore(state=>state.update);
   const migrationNotice=useAppStore(state=>state.migrationNotice);
   const running=useAppStore(state=>state.running);
   const preparingLocal=useAppStore(state=>state.preparingLocal);
@@ -35,7 +38,7 @@ export function App(){
     const over=(event:DragEvent)=>{if(isFile(event))event.preventDefault();};
     const leave=()=>{depth=Math.max(0,depth-1);if(!depth)setDragging(false);};
     const reset=()=>{depth=0;setDragging(false);};
-    const drop=(event:DragEvent)=>{if(isFile(event)){event.preventDefault();if(!window.runtime?.OnFileDrop)toast.danger("浏览器预览不支持读取本地文件，请使用桌面应用");}reset();};
+    const drop=(event:DragEvent)=>{if(isFile(event)){event.preventDefault();if(!isDesktop())toast.danger("浏览器预览不支持读取本地文件，请使用桌面应用");}reset();};
     const off=bridge.onFileDrop(paths=>{reset();void actions.startLocal(paths).then(id=>{if(id)setPage("run");}).catch(reason=>toast.danger(`启动失败：${String(reason)}`));});
     window.addEventListener("dragenter",enter);window.addEventListener("dragover",over);window.addEventListener("dragleave",leave);window.addEventListener("drop",drop);window.addEventListener("dragend",reset);
     return ()=>{off();window.removeEventListener("dragenter",enter);window.removeEventListener("dragover",over);window.removeEventListener("dragleave",leave);window.removeEventListener("drop",drop);window.removeEventListener("dragend",reset);};
@@ -44,7 +47,8 @@ export function App(){
   const nextTheme=()=>setTheme(value=>value==="system"?"light":value==="light"?"dark":"system");
 
   if(!ready) return <div className="loading-shell"><img className="brand-mark" src={appIcon} alt=""/><span>正在载入工作台</span></div>;
-  return <div className="app-shell">
+  if(startupError)return <div className="loading-shell" role="alert"><strong>桌面应用初始化失败</strong><span>{startupError}</span><Button onPress={()=>void actions.init()}>重新载入</Button></div>;
+  return <div className="app-shell" data-file-drop-target>
     {dragging&&<div className="file-drop-overlay" role="status"><div><Upload size={36}/><strong>{running||preparingLocal||savingMode?"测速正在运行或准备中，暂不能添加文件":"释放开始测速"}</strong><span>CSV / TXT / JSON · 可一次拖入多个文件</span></div></div>}
     <aside className="sidebar">
       <div className="brand"><img className="brand-mark" src={appIcon} alt=""/><span><strong>CF Node Bench</strong><small>网络节点测量</small></span></div>
@@ -57,7 +61,7 @@ export function App(){
       </nav>
       <div className="sidebar-foot">
         <span title={`切换主题：${theme}`}><Button isIconOnly variant="tertiary" aria-label={`当前主题：${theme}`} onPress={nextTheme}>{themeIcon}</Button></span>
-        <span>v0.9.0</span>
+        <Button className="version-button" variant="tertiary" size="sm" aria-label="查看应用更新" onPress={()=>{setPage("settings");requestAnimationFrame(()=>document.getElementById("app-update")?.scrollIntoView({block:"nearest"}));}}>{version==="dev"?"开发版":`v${version?.replace(/^v/,"")}`}{["available","ready"].includes(update.status)&&<span className="live-dot"/>}</Button>
       </div>
     </aside>
     <main className="main-content">{migrationNotice&&<p className="migration-notice" role="status">{migrationNotice}</p>}{page==="run"?<RunWorkspace/>:page==="sources"?<SourcesPage/>:page==="publish"?<PublishPage/>:<SettingsPage/>}</main>

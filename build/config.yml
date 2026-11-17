@@ -1,0 +1,28 @@
+version: '3'
+info:
+  companyName: linvva
+  productName: CF Node Bench
+  productIdentifier: com.linvva.cf-node-bench
+  description: Cloudflare 节点测速与优选工具
+  version: '0.10.0'
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir: [.git, node_modules, frontend, build/bin, .codegraph, .serena]
+    file: ['*_test.go', '*.syso']
+    watched_extension: ['*.go']
+    git_ignore: true
+  executes:
+    - cmd: wails3 build DEV=true
+      type: blocking
+    - cmd: wails3 task dev:frontend
+      type: background
+      readiness:
+        tcp: localhost:34115
+        timeout: 60s
+        interval: 200ms
+    - cmd: wails3 task run
+      type: primary
+      exit_policy: shutdown

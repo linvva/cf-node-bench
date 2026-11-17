@@ -116,26 +116,53 @@ func TestCoordinatorRunsUpstreamTargetsInParallelBeforeTelegram(t *testing.T) {
 
 func TestCoordinatorRejectsDuplicateRun(t *testing.T) {
 	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	started := make(chan struct{}, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			_, _ = w.Write([]byte(`{"sha":"old","encoding":"base64","content":"b2xk"}`))
 			return
 		}
+		started <- struct{}{}
 		<-release
 		_ = json.NewEncoder(w).Encode(map[string]any{"content": map[string]string{"sha": "new"}})
 	}))
 	defer server.Close()
+	defer unblock()
 	settings := DefaultSettings()
 	settings.Request.MaxRetries = 0
 	settings.GitHub = GitHubSettings{Enabled: true, Token: "gh", Owner: "owner", Repository: "repo", Branch: "main", Path: "ip.txt"}
 	coordinator := NewCoordinator(testService(server), nil)
+	if coordinator.Busy() {
+		t.Fatal("new coordinator is busy")
+	}
 	if err := coordinator.Enqueue(t.Context(), testSummary(), settings, "github"); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("publication did not start")
+	}
+	if !coordinator.Busy() {
+		t.Fatal("running publication was reported idle")
 	}
 	if err := coordinator.Enqueue(t.Context(), testSummary(), settings, "github"); err != ErrAlreadyPublishing {
 		t.Fatalf("duplicate error=%v", err)
 	}
-	close(release)
+	next := testSummary()
+	next.RunID += "-next"
+	if err := coordinator.Enqueue(t.Context(), next, settings, "github"); err != nil {
+		t.Fatal(err)
+	}
+	unblock()
+	deadline := time.Now().Add(time.Second)
+	for coordinator.Busy() {
+		if time.Now().After(deadline) {
+			t.Fatal("coordinator remained busy after queued publications finished")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func TestCoordinatorSelectsDestinationsFromRunProtocol(t *testing.T) {

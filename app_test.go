@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	runengine "github.com/linvva/cf-node-bench/internal/run"
 	"github.com/linvva/cf-node-bench/internal/source"
 	"github.com/linvva/cf-node-bench/internal/storage"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 func testApp(t *testing.T) *App {
@@ -27,6 +29,53 @@ func testApp(t *testing.T) *App {
 	}
 	return NewApp(store)
 }
+
+func TestAppServiceStartupKeepsApplicationContext(t *testing.T) {
+	app := testApp(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	if err := app.ServiceStartup(ctx, application.ServiceOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if app.appContext().Err() != context.Canceled {
+		t.Fatal("application context cancellation was not preserved")
+	}
+	if got := app.Bootstrap().Version; got != buildVersion {
+		t.Fatalf("version=%q, want %q", got, buildVersion)
+	}
+}
+
+func TestAppRestartPreventsNewRunAndPublication(t *testing.T) {
+	app := testApp(t)
+	summary := model.RunSummary{RunID: "ready", State: "completed"}
+	if err := app.store.AddHistory(summary); err != nil {
+		t.Fatal(err)
+	}
+	app.restarting = true
+	if _, err := app.StartRun(runengine.StartRequest{}); err == nil {
+		t.Fatal("run started while restart was pending")
+	}
+	if err := app.PublishRun(summary.RunID, "all"); err == nil || !strings.Contains(err.Error(), "重启") {
+		t.Fatalf("publication error=%v", err)
+	}
+	if err := app.TestPublishTarget("github", publish.SaveRequest{}); err == nil || !strings.Contains(err.Error(), "重启") {
+		t.Fatalf("publication test error=%v", err)
+	}
+	if app.manager.Current() != "" || app.runPending || app.queue.Busy() {
+		t.Fatal("restart rejection changed active work")
+	}
+}
+
+func TestAppInvalidRunDoesNotStayPending(t *testing.T) {
+	app := testApp(t)
+	if _, err := app.StartRun(runengine.StartRequest{StartStage: "invalid"}); err == nil {
+		t.Fatal("invalid run started")
+	}
+	if app.runPending {
+		t.Fatal("failed startup left a pending run")
+	}
+}
+
 func TestAppH3RequirementSharesSettingsAndPublishing(t *testing.T) {
 	app := testApp(t)
 	settings := app.store.Settings()

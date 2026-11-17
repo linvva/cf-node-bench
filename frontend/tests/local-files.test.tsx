@@ -1,21 +1,20 @@
+import { clearNative, mockNative, type NativeApp } from "./native";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Bootstrap, RunSummary } from "../src/types";
 
 let data:Bootstrap;
 let events:Record<string,(value:unknown)=>void>;
-let drop:((x:number,y:number,paths:string[])=>void)|undefined;
-let api:NonNullable<NonNullable<NonNullable<Window["go"]>["main"]>["App"]>;
+let api:NativeApp;
 function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>(done=>{resolve=done;});return {promise,resolve};}
 beforeEach(async()=>{
-  vi.resetModules();events={};drop=undefined;
+  vi.resetModules();events={};clearNative();
   api={Bootstrap:vi.fn(async()=>data),SelectLocalFiles:vi.fn(async()=>[]),StartLocalFiles:vi.fn(async()=>"local-1")} as unknown as typeof api;
-  window.go={main:{App:api}};
-  window.runtime={EventsOn:(name,handler)=>{events[name]=handler;return ()=>{delete events[name];};},OnFileDrop:vi.fn(handler=>{drop=handler;}),OnFileDropOff:vi.fn(()=>{drop=undefined;})};
+  mockNative(api,events);
   const {defaultSettings,defaultPublishSettings}=await import("../src/lib/bridge");
   data={settings:structuredClone(defaultSettings),publishSettings:structuredClone(defaultPublishSettings),sources:[{id:"http",name:"原 HTTP 源",url:"https://example.test/nodes",enabled:true,nodeCount:12}],history:[],network:{interface:"test",ipv4:"",status:"online"},resume:{options:[]}};
 });
-afterEach(()=>{cleanup();delete window.go;delete window.runtime;vi.restoreAllMocks();});
+afterEach(()=>{cleanup();clearNative();vi.restoreAllMocks();});
 
 it("cancels native selection without starting and blocks competing tasks during selection",async()=>{
   const selected=deferred<string[]|null>();vi.mocked(api.SelectLocalFiles).mockReturnValue(selected.promise);
@@ -40,13 +39,13 @@ it("uses only native dropped paths once, locks the running mode, and labels loca
   fireEvent.dragEnter(window,{dataTransfer:{types:["Files"]}});expect(screen.getByText("释放开始测速")).toBeInTheDocument();
   fireEvent.drop(window,{dataTransfer:{types:["Files"],files:[new File(["ignored DOM content"],"unused.csv")]}});
   const paths=["C:\\节点\\nodes.csv","C:\\Downloads\\nodes.txt"];
-  await act(async()=>drop?.(10,20,paths));
+  await act(async()=>events["files:dropped"]?.(paths));
   expect(api.StartLocalFiles).toHaveBeenCalledExactlyOnceWith(paths);expect(api.SelectLocalFiles).not.toHaveBeenCalled();
   expect(await screen.findByRole("heading",{name:"测速工作台"})).toBeInTheDocument();
   expect(screen.getByRole("tab",{name:"H3"})).toHaveAttribute("aria-disabled","true");
   expect(getAppState().progress).toMatchObject({localFiles:true,mode:"h3"});
   expect(screen.getByLabelText("候选路径")).toHaveTextContent("测试本批文件候选，并额外保留当前模式固化节点");
-  await act(async()=>drop?.(10,20,["other.json"]));expect(api.StartLocalFiles).toHaveBeenCalledTimes(1);
+  await act(async()=>events["files:dropped"]?.(["other.json"]));expect(api.StartLocalFiles).toHaveBeenCalledTimes(1);
   const summary:RunSummary={runId:"local-1",localFiles:true,mode:"h3",state:"completed",results:[],failures:{},publications:[],scoreWeights:data.settings.scoreWeights,reusedStages:[],startedAt:new Date().toISOString(),finishedAt:new Date().toISOString()};
   data.history=[summary];data.currentResultRunId=summary.runId;
   await act(async()=>events["run:complete"](summary));

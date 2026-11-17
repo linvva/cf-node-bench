@@ -5,6 +5,8 @@ import { bandwidthTestURLPresets, h3BandwidthTestURLPresets } from "../../lib/ba
 import { DEFAULT_SCORE_WEIGHTS, scoreWeightTotal } from "../../lib/scoring";
 import { actions, useAppStore } from "../../store";
 import type { ScoreWeights, Settings } from "../../types";
+import { UpdateSection } from "./UpdateSection";
+import { LicenseDialog } from "./LicenseDialog";
 import { CountryPicker } from "./CountryPicker";
 
 const constraints = {
@@ -82,6 +84,7 @@ export function SettingsPage() {
         </SettingsSection>
       </div>
     </div>
+    <UpdateSection/>
     <details className="panel h3-advanced"><summary>H3 高级设置</summary><SettingsSection title="HTTP/3 入口验证" description="默认验证 Cloudflare 公共域名，无需 Worker 或凭据。自定义域名只验证该域名入口，不验证完整 XHTTP、ECH 或 ProxyIP。">
       <div className="field field-wide"><label>验证域名（可选）</label><Input aria-label="验证域名" value={form.verificationHost} placeholder="h3.speed.cloudflare.com" onChange={event=>setForm(current=>({...current,verificationHost:event.target.value}))}/><small>留空使用 h3.speed.cloudflare.com；更改后需重新探测连接。</small></div>
       <Field label="QUIC 握手超时 (ms)" value={form.h3ConnectTimeoutMs} min={100} max={30000} onChange={value=>number("h3ConnectTimeoutMs",value)}/>
@@ -89,6 +92,7 @@ export function SettingsPage() {
       <BandwidthTestPresetField isH3 value={form.h3BandwidthTestUrl} onChange={h3BandwidthTestUrl=>setForm(current=>({...current,h3BandwidthTestUrl}))}/>
       <div className="field field-wide"><label>H3 下载测速 URL</label><Input aria-label="H3 下载测速 URL" value={form.h3BandwidthTestUrl} onChange={event=>setForm(current=>({...current,h3BandwidthTestUrl:event.target.value}))}/><small>固定候选 IPv4，强制 HTTP/3，不跟随重定向；多 IP 域名累计下载。</small></div>
     </SettingsSection></details>
+    <div className="license-entry"><LicenseDialog/></div>
   </div>;
 }
 

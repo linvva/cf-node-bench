@@ -6,16 +6,16 @@ import (
 	"path/filepath"
 
 	"github.com/linvva/cf-node-bench/internal/storage"
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"github.com/wailsapp/wails/v2/pkg/options/windows"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/updater"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
+	updater.HandleHelperMode()
 	appDataDir, err := storage.DefaultDir()
 	if err != nil {
 		log.Fatal(err)
@@ -25,16 +25,31 @@ func main() {
 		log.Fatal(err)
 	}
 	app := NewApp(store)
-	err = wails.Run(&options.App{
-		Title: "CF Node Bench", Width: 1440, Height: 900, MinWidth: 1180, MinHeight: 720,
-		AssetServer:      &assetserver.Options{Assets: assets},
-		BackgroundColour: &options.RGBA{R: 246, G: 247, B: 249, A: 1},
-		Windows:          &windows.Options{WebviewUserDataPath: filepath.Join(appDataDir, "WebView2")},
-		DragAndDrop:      &options.DragAndDrop{EnableFileDrop: true},
-		OnStartup:        app.startup,
-		Bind:             []interface{}{app},
+	desktop := application.New(application.Options{
+		Name:     "CF Node Bench",
+		Services: []application.Service{application.NewService(app)},
+		Assets: application.AssetOptions{
+			Handler: application.AssetFileServerFS(assets),
+		},
+		Windows: application.WindowsOptions{WebviewUserDataPath: filepath.Join(appDataDir, "WebView2")},
+		Mac: application.MacOptions{
+			ApplicationShouldTerminateAfterLastWindowClosed: true,
+		},
 	})
-	if err != nil {
+	app.desktop = desktop
+	if err := app.configureUpdater(desktop); err != nil {
+		log.Fatal(err)
+	}
+	window := desktop.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title: "CF Node Bench", Width: 1440, Height: 900, MinWidth: 1180, MinHeight: 720,
+		BackgroundColour: application.NewRGB(246, 247, 249),
+		EnableFileDrop:   true,
+		URL:              "/",
+	})
+	window.OnWindowEvent(events.Common.WindowFilesDropped, func(event *application.WindowEvent) {
+		desktop.Event.Emit("files:dropped", event.Context().DroppedFiles())
+	})
+	if err := desktop.Run(); err != nil {
 		log.Fatal(err)
 	}
 }

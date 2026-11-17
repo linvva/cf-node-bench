@@ -1,14 +1,20 @@
-import type { Bootstrap, Mode, PinnedNode, ProbeResult, Candidate, FailureReason, HTTPSource, PublicationResult, PublicationUpdate, PublishCredentialTarget, PublishSaveRequest, PublishSettingsView, PublishTarget, ResumeInfo, RunProgress, RunStartRequest, RunStartStage, RunSummary, ScoreWeights, Settings, StageProgress } from "../types";
+import type { Bootstrap, Mode, PinnedNode, ProbeResult, Candidate, FailureReason, HTTPSource, PublicationResult, PublicationUpdate, PublishCredentialTarget, PublishSaveRequest, PublishSettingsView, PublishTarget, ResumeInfo, RunProgress, RunStartRequest, RunStartStage, RunSummary, ScoreWeights, Settings, StageProgress, UpdateState } from "../types";
 import { DEFAULT_BANDWIDTH_TEST_URL, DEFAULT_H3_BANDWIDTH_TEST_URL } from "./bandwidthTestUrls";
 import { DEFAULT_SCORE_WEIGHTS, H3_LEGACY_SCORE_WEIGHTS, LEGACY_SCORE_WEIGHTS, connectionWeight, httpWeight } from "./scoring";
 
 type Handler<T> = (value: T) => void;
 
-declare global {
-  interface Window {
-    go?: { main?: { App?: { Bootstrap(): Promise<Bootstrap>; SaveSettings(value: Settings): Promise<void>; SaveSources(value: HTTPSource[]): Promise<void>; SetNodePinned(runId: string, candidateKey: string, pinned: boolean): Promise<PinnedNode[]>; SavePublishSettings(value: PublishSaveRequest): Promise<PublishSettingsView>; ClearPublishCredential(target: PublishCredentialTarget): Promise<PublishSettingsView>; TestPublishTarget(target: PublishTarget, value: PublishSaveRequest): Promise<void>; PublishRun(runId: string, target: "all" | PublishTarget): Promise<void>; SelectLocalFiles(): Promise<string[] | null>; StartLocalFiles(paths: string[]): Promise<string>; StartRun(value: RunStartRequest): Promise<string>; CancelRun(): Promise<boolean>; CancelRunWithResults(keepResults: boolean): Promise<boolean> } } };
-    runtime?: { EventsOn(name: string, handler: Handler<unknown>): () => void; BrowserOpenURL?(url: string): void; OnFileDrop?(handler:(x:number,y:number,paths:string[])=>void,useDropTarget:boolean):void; OnFileDropOff?():void };
-  }
+export function isDesktop(){
+  const host=window as typeof window & {_wails?:{environment?:unknown};chrome?:{webview?:unknown};webkit?:{messageHandlers?:{external?:unknown}}};
+  return Boolean(host._wails?.environment||host.chrome?.webview||host.webkit?.messageHandlers?.external||location.protocol==="wails:"||location.hostname==="wails.localhost");
+}
+
+let nativeModule:Promise<typeof import("./native")>|undefined;
+function native(){return nativeModule??=import("./native");}
+function nativeEvent<T>(name:string,handler:Handler<T>){
+  let off:(()=>void)|undefined,disposed=false;
+  if(isDesktop())void native().then(module=>{if(!disposed)off=module.onEvent(name,handler);}).catch(error=>console.error("桌面事件初始化失败",error));
+  return ()=>{disposed=true;off?.();};
 }
 
 const progressHandlers = new Set<Handler<RunProgress>>();
@@ -65,6 +71,7 @@ export function normalizeBootstrap(value: Bootstrap): Bootstrap {
   const weights=settings.scoreWeights??defaults.scoreWeights;
   return {
     ...value,
+    version:value?.version||"dev",
     settings: {
       ...defaults,
       ...settings,
@@ -89,6 +96,7 @@ function normalizeResume(value?:ResumeInfo):ResumeInfo{
 }
 
 let mockData: Bootstrap = {
+  version:"dev",
   settings: defaultSettings,
   publishSettings: structuredClone(defaultPublishSettings),
   sources: [
@@ -313,12 +321,20 @@ function mockPublication(update:PublicationUpdate){
   publishHandlers.forEach(handler=>handler(update));
 }
 
+const previewUpdate:UpdateState={currentVersion:"dev",status:"unavailable",error:"浏览器预览不支持自动更新，请使用桌面应用"};
+
 export const bridge = {
-  async bootstrap(): Promise<Bootstrap> { const value=window.go?.main?.App ? await window.go.main.App.Bootstrap() : structuredClone(mockData); return normalizeBootstrap(value); },
-  async saveSettings(value: Settings) { if(window.go?.main?.App) return window.go.main.App.SaveSettings(value); if(mockActive&&value.requireH3!==mockData.settings.requireH3)throw new Error("测速中不能切换 H3 要求"); mockData.settings=structuredClone(value); const base=mockData.history.find(summary=>summary.runId===mockData.resume.baseRunId); if(base)mockData.resume=mockResume(base); },
-  async saveSources(value: HTTPSource[]) { if(window.go?.main?.App) return window.go.main.App.SaveSources(value); mockData.sources=structuredClone(value); },
+  async updateStatus():Promise<UpdateState>{return isDesktop()?(await native()).app.UpdateStatus():{...previewUpdate};},
+  async checkForUpdate():Promise<UpdateState>{return isDesktop()?(await native()).app.CheckForUpdate():{...previewUpdate};},
+  async downloadUpdate():Promise<UpdateState>{if(!isDesktop())throw new Error(previewUpdate.error);return (await native()).app.DownloadUpdate();},
+  async restartForUpdate(){if(!isDesktop())throw new Error(previewUpdate.error);await (await native()).app.RestartForUpdate();},
+  onUpdate(handler:Handler<UpdateState>){return nativeEvent<UpdateState>("update:state",handler);},
+  async openURL(url:string){if(isDesktop())await (await native()).openURL(url);else window.open(url,"_blank","noopener,noreferrer");},
+  async bootstrap(): Promise<Bootstrap> { const value=isDesktop() ? await (await native()).app.Bootstrap() : structuredClone(mockData); return normalizeBootstrap(value); },
+  async saveSettings(value: Settings) { if(isDesktop()) return (await native()).app.SaveSettings(value); if(mockActive&&value.requireH3!==mockData.settings.requireH3)throw new Error("测速中不能切换 H3 要求"); mockData.settings=structuredClone(value); const base=mockData.history.find(summary=>summary.runId===mockData.resume.baseRunId); if(base)mockData.resume=mockResume(base); },
+  async saveSources(value: HTTPSource[]) { if(isDesktop()) return (await native()).app.SaveSources(value); mockData.sources=structuredClone(value); },
   async setNodePinned(runId:string,key:string,pinned:boolean):Promise<PinnedNode[]>{
-    if(window.go?.main?.App)return window.go.main.App.SetNodePinned(runId,key,pinned);
+    if(isDesktop())return (await (await native()).app.SetNodePinned(runId,key,pinned)??[]) as PinnedNode[];
     if(mockActive)throw new Error("测速运行中不能修改固化节点");
     const summary=mockData.history.find(item=>item.runId===runId);
     const result=summary?.results.find(item=>candidateKey(item.candidate)===key);
@@ -330,14 +346,14 @@ export const bridge = {
     return structuredClone(nodes);
   },
   async savePublishSettings(value: PublishSaveRequest) {
-    if(window.go?.main?.App) return window.go.main.App.SavePublishSettings(value);
+    if(isDesktop()) return (await native()).app.SavePublishSettings(value);
     const current=mockData.publishSettings;
     const next=normalizePublishSettings(value.settings);
     mockData.publishSettings={...structuredClone(next),cloudflare:{...next.cloudflare,tokenConfigured:current.cloudflare.tokenConfigured||Boolean(value.cloudflareToken.trim())},github:{...next.github,tokenConfigured:current.github.tokenConfigured||Boolean(value.githubToken.trim())},gist:{...next.gist,tokenConfigured:current.gist.tokenConfigured||Boolean(value.gistToken.trim())},telegram:{...next.telegram,tokenConfigured:current.telegram.tokenConfigured||Boolean(value.telegramBotToken.trim()),relayKeyConfigured:current.telegram.relayKeyConfigured||Boolean(value.telegramRelayKey.trim())}};
     return structuredClone(mockData.publishSettings);
   },
   async clearPublishCredential(target: PublishCredentialTarget) {
-    if(window.go?.main?.App) return window.go.main.App.ClearPublishCredential(target);
+    if(isDesktop()) return (await native()).app.ClearPublishCredential(target);
     if(target==="telegramRelay"){
       const telegram=mockData.publishSettings.telegram;
       mockData.publishSettings={...mockData.publishSettings,telegram:{...telegram,enabled:telegram.deliveryMode==="relay"?false:telegram.enabled,relayKeyConfigured:false}};
@@ -346,9 +362,9 @@ export const bridge = {
     }
     return structuredClone(mockData.publishSettings);
   },
-  async testPublishTarget(target: PublishTarget,value:PublishSaveRequest) { if(window.go?.main?.App) return window.go.main.App.TestPublishTarget(target,value); },
+  async testPublishTarget(target: PublishTarget,value:PublishSaveRequest) { if(isDesktop()) return (await native()).app.TestPublishTarget(target,value); },
   async publishRun(runId:string,target:"all"|PublishTarget) {
-    if(window.go?.main?.App) return window.go.main.App.PublishRun(runId,target);
+    if(isDesktop()) return (await native()).app.PublishRun(runId,target);
     const summary=mockData.history.find(item=>item.runId===runId);
     const publishSettings=publishSettingsForMode(mockData.publishSettings,summary?.mode);
     if(!summary||(summary.state!=="completed"&&!(summary.state==="cancelled"&&summary.partialResults&&summary.results.length))) throw new Error("只有已完成或已保留部分结果的测速可以发布");
@@ -366,19 +382,18 @@ export const bridge = {
     },180);
   },
   async selectLocalFiles():Promise<string[] | null> {
-    if(window.go?.main?.App) return window.go.main.App.SelectLocalFiles();
+    if(isDesktop()) return (await native()).app.SelectLocalFiles();
     throw new Error("浏览器预览不支持读取本地文件，请使用桌面应用");
   },
   async startLocalFiles(paths:string[]):Promise<string> {
-    if(window.go?.main?.App) return window.go.main.App.StartLocalFiles(paths);
+    if(isDesktop()) return (await native()).app.StartLocalFiles(paths);
     throw new Error("浏览器预览不支持读取本地文件，请使用桌面应用");
   },
   onFileDrop(handler:(paths:string[])=>void){
-    window.runtime?.OnFileDrop?.((_x,_y,paths)=>handler(paths),false);
-    return ()=>window.runtime?.OnFileDropOff?.();
+    return nativeEvent<string[]>("files:dropped",handler);
   },
   async startRun(request:RunStartRequest) {
-    if(window.go?.main?.App) return window.go.main.App.StartRun(request);
+    if(isDesktop()) return (await native()).app.StartRun(request);
     if(mockActive)throw new Error("已有测速任务运行中");
     if(request.startStage!=="source"){
       const option=mockData.resume.options.find(item=>item.stage===request.startStage);
@@ -388,8 +403,8 @@ export const bridge = {
     mockActive=true;mockCancelled=false; mockParentRunId=request.startStage==="source"?"":mockData.resume.baseRunId??""; mockStartStage=request.startStage; mockRunId=`run-${Date.now()}`; mockStartedAt=new Date().toISOString(); mockRunSettings=structuredClone(mockData.settings); const plan=mockPlan(); const startIndex=startIndexFor(plan,mockStartStage); mockCompleted=startIndex; let step=startIndex;
     mockTimer=window.setInterval(()=>{ const completed=Math.min(step,plan.length); mockCompleted=completed; const stages=mockProgressStages(plan,completed); progressHandlers.forEach(h=>h({runId:mockRunId,mode:currentMockSettings().requireH3?"h3":"tcp_https",logicalCandidates:currentMockSettings().requireH3?h3MockCandidates().length:undefined,physicalCandidates:currentMockSettings().requireH3?h3MockCandidates().reduce((sum,candidate)=>sum+(candidate.addressType==="domain"?2:1),0):undefined,downloadedBytes:currentMockSettings().requireH3&&completed>5&&mockStartStage!=="ranking"?(plan[5].passed+(plan[5].passed>0&&h3MockCandidates().some(candidate=>candidate.addressType==="domain")?1:0))*currentMockSettings().maxDownloadBytes:0,state:"running",availableResults:mockAvailableResults(plan,completed),startedAt:mockStartedAt,stages,failures:mockFailures(plan,completed)})); if(completed===plan.length){ window.clearInterval(mockTimer); const summary=mockResults(); mockData.history=[summary,...mockData.history].slice(0,40); mockData.currentResultRunId=summary.runId; mockCheckpointSettings=mockRunSettings; mockData.resume=mockResume(summary); mockActive=false;completeHandlers.forEach(h=>h(summary)); if(summary.state==="completed")void bridge.publishRun(summary.runId,"all"); } step++; },520); return mockRunId;
   },
-  async cancelRun(keepResults=false){ if(window.go?.main?.App) return keepResults?window.go.main.App.CancelRunWithResults(true):window.go.main.App.CancelRun(); if(!mockActive)return false; mockCancelled=true; window.clearInterval(mockTimer); const summary=mockResults(mockRunId,mockStartedAt,mockCompleted,keepResults); mockData.history=[summary,...mockData.history].slice(0,40); mockData.currentResultRunId=summary.runId; mockCheckpointSettings=mockRunSettings; mockData.resume=mockResume(summary); mockActive=false;completeHandlers.forEach(h=>h(summary)); return true; },
-  onProgress(handler:Handler<RunProgress>){ progressHandlers.add(handler); const off=window.runtime?.EventsOn("run:progress",value=>handler(normalizeProgress(value as RunProgress))); return ()=>{progressHandlers.delete(handler); off?.();}; },
-  onComplete(handler:Handler<RunSummary>){ completeHandlers.add(handler); const off=window.runtime?.EventsOn("run:complete",value=>handler(normalizeSummary(value as RunSummary))); return ()=>{completeHandlers.delete(handler); off?.();}; },
-  onPublish(handler:Handler<PublicationUpdate>){ publishHandlers.add(handler); const off=window.runtime?.EventsOn("publish:progress",value=>handler(value as PublicationUpdate)); return ()=>{publishHandlers.delete(handler); off?.();}; },
+  async cancelRun(keepResults=false){ if(isDesktop()){const {app}=await native();return keepResults?app.CancelRunWithResults(true):app.CancelRun();} if(!mockActive)return false; mockCancelled=true; window.clearInterval(mockTimer); const summary=mockResults(mockRunId,mockStartedAt,mockCompleted,keepResults); mockData.history=[summary,...mockData.history].slice(0,40); mockData.currentResultRunId=summary.runId; mockCheckpointSettings=mockRunSettings; mockData.resume=mockResume(summary); mockActive=false;completeHandlers.forEach(h=>h(summary)); return true; },
+  onProgress(handler:Handler<RunProgress>){ progressHandlers.add(handler); const off=nativeEvent<RunProgress>("run:progress",value=>handler(normalizeProgress(value))); return ()=>{progressHandlers.delete(handler); off?.();}; },
+  onComplete(handler:Handler<RunSummary>){ completeHandlers.add(handler); const off=nativeEvent<RunSummary>("run:complete",value=>handler(normalizeSummary(value))); return ()=>{completeHandlers.delete(handler); off?.();}; },
+  onPublish(handler:Handler<PublicationUpdate>){ publishHandlers.add(handler); const off=nativeEvent<PublicationUpdate>("publish:progress",handler); return ()=>{publishHandlers.delete(handler); off?.();}; },
 };

@@ -40,6 +40,12 @@ func NewCoordinator(service *Service, update func(Update)) *Coordinator {
 	return &Coordinator{service: service, update: update, pending: map[string]bool{}}
 }
 
+func (c *Coordinator) Busy() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.working || len(c.queue) > 0
+}
+
 func (c *Coordinator) Enqueue(ctx context.Context, summary model.RunSummary, settings Settings, target string) error {
 	if err := settings.validateH3Targets(); err != nil {
 		return err

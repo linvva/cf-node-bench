@@ -8,6 +8,11 @@
 /frontend/playwright-report/
 /frontend/test-results/
 /frontend/wailsjs/
+/frontend/bindings/
+/build/darwin/icons.icns
+/*.syso
+/.task/
+/.update-keys/
 /coverage/
 /output/
 *.log

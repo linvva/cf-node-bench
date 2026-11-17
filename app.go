@@ -15,7 +15,7 @@ import (
 	runengine "github.com/linvva/cf-node-bench/internal/run"
 	"github.com/linvva/cf-node-bench/internal/source"
 	"github.com/linvva/cf-node-bench/internal/storage"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 type NetworkInfo struct {
@@ -25,6 +25,7 @@ type NetworkInfo struct {
 }
 
 type Bootstrap struct {
+	Version            string               `json:"version"`
 	Settings           config.Settings      `json:"settings"`
 	PublishSettings    publish.SettingsView `json:"publishSettings"`
 	Sources            []source.HTTPSource  `json:"sources"`
@@ -38,13 +39,17 @@ type Bootstrap struct {
 }
 
 type App struct {
-	ctx     context.Context
-	store   *storage.Store
-	manager runengine.Manager
-	engine  runengine.Engine
-	publish *publish.Service
-	queue   *publish.Coordinator
-	mu      sync.Mutex
+	ctx        context.Context
+	desktop    *application.App
+	updates    *updateController
+	store      *storage.Store
+	manager    runengine.Manager
+	engine     runengine.Engine
+	publish    *publish.Service
+	queue      *publish.Coordinator
+	mu         sync.Mutex
+	restarting bool
+	runPending bool
 }
 
 func NewApp(store *storage.Store) *App {
@@ -80,11 +85,14 @@ func (f trackingFetcher) Fetch(ctx context.Context, current source.HTTPSource) (
 	return result, err
 }
 
-func (a *App) startup(ctx context.Context) { a.ctx = ctx }
+func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
+	a.ctx = ctx
+	return nil
+}
 
 func (a *App) Bootstrap() Bootstrap {
 	network := detectNetwork()
-	return Bootstrap{Settings: a.store.Settings(), PublishSettings: a.store.PublishSettingsView(), Sources: a.store.Sources(), History: a.store.History(), PinnedNodes: a.store.PinnedNodes(), Network: network, Current: a.manager.Current(), Resume: a.resumeInfo(network), MigrationNotice: a.store.MigrationNotice(), CurrentResultRunID: a.store.CurrentResultID()}
+	return Bootstrap{Version: buildVersion, Settings: a.store.Settings(), PublishSettings: a.store.PublishSettingsView(), Sources: a.store.Sources(), History: a.store.History(), PinnedNodes: a.store.PinnedNodes(), Network: network, Current: a.manager.Current(), Resume: a.resumeInfo(network), MigrationNotice: a.store.MigrationNotice(), CurrentResultRunID: a.store.CurrentResultID()}
 }
 
 func (a *App) SetNodePinned(runID, candidateKey string, pinned bool) ([]model.PinnedNode, error) {
@@ -134,6 +142,11 @@ func (a *App) ClearPublishCredential(target string) (publish.SettingsView, error
 }
 
 func (a *App) TestPublishTarget(target string, request publish.SaveRequest) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.restarting {
+		return fmt.Errorf("应用正在重启以完成更新")
+	}
 	if request.TestMode != "" && request.TestMode != model.ModeTCPHTTPS && request.TestMode != model.ModeH3 {
 		return fmt.Errorf("未知发布测试协议")
 	}
@@ -184,6 +197,11 @@ func (a *App) TestPublishTarget(target string, request publish.SaveRequest) erro
 }
 
 func (a *App) PublishRun(runID, target string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.restarting {
+		return fmt.Errorf("应用正在重启以完成更新")
+	}
 	if target != "all" && target != "cloudflare" && target != "github" && target != "gist" && target != "telegram" {
 		return fmt.Errorf("未知发布目标")
 	}
@@ -220,13 +238,13 @@ func (a *App) SelectLocalFiles() ([]string, error) {
 	if a.manager.Current() != "" {
 		return nil, runengine.ErrAlreadyRunning
 	}
-	if a.ctx == nil {
+	if a.desktop == nil {
 		return nil, fmt.Errorf("文件选择仅在桌面应用中可用")
 	}
-	return runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:   "选择节点文件开始测速",
-		Filters: []runtime.FileFilter{{DisplayName: "节点文件 (*.csv, *.txt, *.json)", Pattern: "*.csv;*.txt;*.json"}},
-	})
+	return a.desktop.Dialog.OpenFile().
+		SetTitle("选择节点文件开始测速").
+		AddFilter("节点文件 (*.csv, *.txt, *.json)", "*.csv;*.txt;*.json").
+		PromptForMultipleSelection()
 }
 
 func (a *App) StartLocalFiles(paths []string) (string, error) {
@@ -239,7 +257,10 @@ func (a *App) StartLocalFiles(paths []string) (string, error) {
 func (a *App) startRun(request runengine.StartRequest, paths []string) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.manager.Current() != "" {
+	if a.restarting {
+		return "", fmt.Errorf("应用正在重启以完成更新")
+	}
+	if a.runPending || a.manager.Current() != "" {
 		return "", runengine.ErrAlreadyRunning
 	}
 	settings := a.store.Settings()
@@ -311,19 +332,26 @@ func (a *App) startRun(request runengine.StartRequest, paths []string) (string, 
 		base = &checkpoint
 	}
 	input := runengine.RunInput{LocalFiles: localFiles, Sources: a.store.Sources(), Retained: retained, Pinned: a.pinnedCandidates(), Plan: runengine.RunPlan{StartStage: stage, Base: base, Network: networkSnapshot, Save: a.store.SaveCheckpoint}}
-	return a.manager.Start(a.appContext(), a.engine, settings, input, func(progress model.RunProgress) {
-		if a.ctx != nil {
-			runtime.EventsEmit(a.ctx, "run:progress", progress)
+	id, err := a.manager.Start(a.appContext(), a.engine, settings, input, func(progress model.RunProgress) {
+		if a.desktop != nil {
+			a.desktop.Event.Emit("run:progress", progress)
 		}
 	}, func(summary model.RunSummary) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		defer func() { a.runPending = false }()
 		_ = a.store.AddHistory(summary)
-		if a.ctx != nil {
-			runtime.EventsEmit(a.ctx, "run:complete", summary)
+		if a.desktop != nil {
+			a.desktop.Event.Emit("run:complete", summary)
 		}
-		if summary.State == "completed" {
+		if summary.State == "completed" && !a.restarting {
 			_ = a.queue.Enqueue(a.appContext(), summary, a.store.PublishSettings(), "all")
 		}
 	})
+	if err == nil {
+		a.runPending = true
+	}
+	return id, err
 }
 
 func (a *App) latestRunID() string {
@@ -351,8 +379,8 @@ func (a *App) CancelRunWithResults(keepResults bool) bool {
 
 func (a *App) handlePublishUpdate(update publish.Update) {
 	_ = a.store.UpdatePublication(update.RunID, update.Result)
-	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "publish:progress", update)
+	if a.desktop != nil {
+		a.desktop.Event.Emit("publish:progress", update)
 	}
 }
 

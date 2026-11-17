@@ -1,18 +1,17 @@
+import { installNative } from "./native";
 import { expect, test } from "@playwright/test";
 import type { Bootstrap, RunSummary, Settings } from "../src/types";
 
 test("native file selection and window drops start one-time runs without changing sources",async({page},testInfo)=>{
+  await installNative(page);
   await page.addInitScript(()=>{
-    const events:Record<string,(value:unknown)=>void>={};
-    let dropped:((x:number,y:number,paths:string[])=>void)|undefined;
     const data={sources:[{id:"http",name:"原 HTTP 源",url:"https://example.test/nodes",enabled:true,nodeCount:12}],history:[],network:{interface:"test",ipv4:"",status:"online"},resume:{options:[]}} as unknown as Bootstrap;
-    const state={selected:[] as string[],calls:[] as string[][],drop:(paths:string[])=>dropped?.(50,60,paths),complete:()=>{
+    const state={selected:[] as string[],calls:[] as string[][],drop:(paths:string[])=>window.__emitNative("files:dropped",paths),complete:()=>{
       const summary={runId:`local-${state.calls.length}`,mode:data.settings?.requireH3?"h3":"tcp_https",localFiles:true,state:"completed",results:[],failures:{},publications:[],scoreWeights:data.settings?.scoreWeights,reusedStages:[],startedAt:new Date().toISOString(),finishedAt:new Date().toISOString()} as RunSummary;
-      data.history.unshift(summary);data.currentResultRunId=summary.runId;events["run:complete"](summary);
+      data.history.unshift(summary);data.currentResultRunId=summary.runId;window.__emitNative("run:complete",summary);
     }};
     (window as typeof window&{__localFiles:typeof state}).__localFiles=state;
-    window.go={main:{App:{Bootstrap:async()=>data,SelectLocalFiles:async()=>state.selected,StartLocalFiles:async(paths:string[])=>{state.calls.push(paths);return `local-${state.calls.length}`;},SaveSettings:async(settings:Settings)=>{data.settings=settings;}} as NonNullable<NonNullable<NonNullable<Window["go"]>["main"]>["App"]>}};
-    window.runtime={EventsOn:(name,handler)=>{events[name]=handler;return ()=>{delete events[name];};},OnFileDrop:handler=>{dropped=handler;},OnFileDropOff:()=>{dropped=undefined;}};
+    window.__nativeApi={...window.__nativeApi,Bootstrap:async()=>data,SelectLocalFiles:async()=>state.selected,StartLocalFiles:async(paths:string[])=>{state.calls.push(paths);return `local-${state.calls.length}`;},SaveSettings:async(settings:Settings)=>{data.settings=settings;}};
   });
   await page.goto("/");
   const local=page.getByRole("button",{name:"本地文件测速",exact:true});
