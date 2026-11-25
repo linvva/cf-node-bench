@@ -12,6 +12,22 @@ function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>
 beforeEach(async()=>{await actions.init();await actions.saveSettings(defaultSettings);});
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
 
+it("validates and reloads the shared bandwidth threshold settings",async()=>{
+  render(<App/>);
+  await screen.findByRole("heading",{name:"测速工作台"});
+  fireEvent.click(screen.getByRole("button",{name:"设置"}));
+  const minimum=screen.getByRole("spinbutton",{name:"最低节点带宽"});
+  const line=screen.getByRole("spinbutton",{name:"线路带宽上限"});
+  fireEvent.change(minimum,{target:{value:"80.5"}});
+  fireEvent.change(line,{target:{value:"70"}});
+  fireEvent.click(screen.getByRole("button",{name:"保存设置"}));
+  expect(await screen.findByText("线路带宽上限不能低于最低节点带宽")).toBeInTheDocument();
+  fireEvent.change(line,{target:{value:"100"}});
+  fireEvent.click(screen.getByRole("button",{name:"保存设置"}));
+  await waitFor(()=>expect(getAppState().settings).toMatchObject({minBandwidthMbps:80.5,lineBandwidthMbps:100}));
+  await expect(bridge.bootstrap()).resolves.toMatchObject({settings:{minBandwidthMbps:80.5,lineBandwidthMbps:100}});
+});
+
 describe("shared publication and H3 requirement",()=>{
   it.each(["save","clear"] as const)("applies a delayed %s to the shared publication after changing the H3 requirement",async(operation)=>{
     const updated={...getAppState().publishSettings,gist:{...getAppState().publishSettings.gist,filename:"shared.txt"}};

@@ -2,11 +2,40 @@ package config
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/linvva/cf-node-bench/internal/model"
 )
+
+func TestBandwidthThresholdSettings(t *testing.T) {
+	var settings Settings
+	if err := json.Unmarshal([]byte(`{"maxDownloadBytes":20971520}`), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings.MinBandwidthMbps != 0 || settings.LineBandwidthMbps != 0 {
+		t.Fatalf("legacy settings enabled the threshold: %+v", settings)
+	}
+	for _, test := range []struct {
+		minimum, line float64
+		valid         bool
+	}{
+		{80.5, 0, true},
+		{80, 80, true},
+		{80, 100, true},
+		{80, 79, false},
+		{-1, 100, false},
+		{80, -1, false},
+		{math.NaN(), 100, false},
+		{80, math.Inf(1), false},
+	} {
+		settings.MinBandwidthMbps, settings.LineBandwidthMbps = test.minimum, test.line
+		if err := settings.Validate(); (err == nil) != test.valid {
+			t.Errorf("minimum=%v, line=%v: %v", test.minimum, test.line, err)
+		}
+	}
+}
 
 func TestSettingsValidation(t *testing.T) {
 	settings := DefaultSettings()

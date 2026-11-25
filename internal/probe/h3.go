@@ -136,6 +136,7 @@ type H3BandwidthProber struct {
 	MaxBytes       int64
 	RootCAs        *x509.CertPool
 	URL            string
+	Threshold      BandwidthThreshold
 }
 
 func (p H3BandwidthProber) Probe(ctx context.Context, candidate model.Candidate) model.BandwidthStats {
@@ -155,20 +156,28 @@ func (p H3BandwidthProber) Probe(ctx context.Context, candidate model.Candidate)
 	}
 	defer closeClient()
 	started := time.Now()
+	testCtx, stopAtThreshold := p.Threshold.withDeadline(testCtx, started, p.MaxBytes)
+	defer stopAtThreshold()
 	var firstByte atomic.Int64
 	req.Header.Set("Accept-Encoding", "identity")
-	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+	req = req.WithContext(httptrace.WithClientTrace(testCtx, &httptrace.ClientTrace{
 		GotFirstResponseByte: func() { firstByte.CompareAndSwap(0, time.Since(started).Nanoseconds()) },
 	}))
 	resp, err := client.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return model.BandwidthStats{Failure: classifyH3(ctx, ctx.Err())}
+		}
+		if bandwidthCutShort(ctx, testCtx, err) {
+			return model.BandwidthStats{DurationMS: milliseconds(time.Since(started)), Failure: model.FailureBandwidthBelowMin}
+		}
 		return model.BandwidthStats{Failure: classifyH3(testCtx, err)}
 	}
 	defer resp.Body.Close()
 	if failure := h3ResponseFailure(resp); failure != "" {
 		return model.BandwidthStats{Failure: failure}
 	}
-	bytesRead, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, p.MaxBytes))
+	bytesRead, readErr := p.Threshold.read(testCtx, resp.Body, started, p.MaxBytes)
 	duration := time.Since(started)
 	stats := model.BandwidthStats{Bytes: bytesRead, DurationMS: milliseconds(duration), TTFBMS: milliseconds(time.Duration(firstByte.Load()))}
 	// The local deadline bounds the measurement, just like MaxBytes. A useful
@@ -177,12 +186,17 @@ func (p H3BandwidthProber) Probe(ctx context.Context, candidate model.Candidate)
 	budgetReached := errors.Is(testCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 	if ctx.Err() != nil {
 		stats.Failure = classifyH3(ctx, ctx.Err())
+	} else if bandwidthCutShort(ctx, testCtx, readErr) {
+		stats.Failure = model.FailureBandwidthBelowMin
 	} else if readErr != nil && !(budgetReached && bytesRead >= 64*1024) {
 		stats.Failure = classifyH3(testCtx, readErr)
 	} else if bytesRead < 64*1024 {
 		stats.Failure = model.FailureDownload
 	} else if duration > 0 {
 		stats.Mbps = float64(bytesRead*8) / duration.Seconds() / 1_000_000
+		if stats.Mbps < p.Threshold.MinMbps {
+			stats.Failure = model.FailureBandwidthBelowMin
+		}
 	}
 	return stats
 }

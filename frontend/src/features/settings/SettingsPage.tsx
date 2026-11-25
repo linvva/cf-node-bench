@@ -57,6 +57,12 @@ export function SettingsPage() {
         <SettingsSection title="下载测速" description="普通测速使用下方地址；H3 下载地址在高级设置中配置。下载上限按每个实际 IP 计算。">
           <BandwidthTestPresetField isH3={false} value={form.bandwidthTestUrl} onChange={(value) => setForm((current) => ({ ...current, bandwidthTestUrl: value }))} />
           <MiBField value={form.maxDownloadBytes} onChange={(value) => setForm((current) => ({ ...current, maxDownloadBytes: value }))} />
+          <BandwidthField label="最低节点带宽" value={form.minBandwidthMbps}
+            description="填 0 关闭门槛。预计无法达标时提前结束下载。"
+            onChange={minBandwidthMbps=>setForm(current=>({...current,minBandwidthMbps}))}/>
+          <BandwidthField label="线路带宽上限" value={form.lineBandwidthMbps}
+            description="留空或填 0 即可省略。请填整条线路可达到的下载峰值，填得过低可能误淘汰。"
+            onChange={lineBandwidthMbps=>setForm(current=>({...current,lineBandwidthMbps}))}/>
           <div className="field field-wide"><label>下载测速 URL</label><Input aria-label="下载测速 URL" value={form.bandwidthTestUrl} placeholder="https://example.com/file.bin" onChange={(event) => setForm((current) => ({ ...current, bandwidthTestUrl: event.target.value }))} /></div>
         </SettingsSection>
       </div>
@@ -106,6 +112,9 @@ export function validateSettings(form: Settings) {
     }
     if(scoreWeightTotal(form.scoreWeights)!==100)return "评分权重总和必须等于 100";
     if (form.maxDownloadBytes < 1048576 || form.maxDownloadBytes > 1073741824) return "最大下载量必须在 1 到 1024 MiB 之间";
+    if (!Number.isFinite(form.minBandwidthMbps) || form.minBandwidthMbps < 0) return "最低节点带宽必须为有限的非负数";
+    if (!Number.isFinite(form.lineBandwidthMbps) || form.lineBandwidthMbps < 0) return "线路带宽上限必须为有限的非负数";
+    if (form.lineBandwidthMbps > 0 && form.lineBandwidthMbps < form.minBandwidthMbps) return "线路带宽上限不能低于最低节点带宽";
     const bandwidthURLMessage = validateBandwidthTestURL(form.bandwidthTestUrl)||validateBandwidthTestURL(form.h3BandwidthTestUrl);
     if (bandwidthURLMessage) return bandwidthURLMessage;
     if (form.finalResultCount > form.bandwidthCandidates) return "最终结果数不能大于带宽目标通过数";
@@ -149,6 +158,12 @@ function RateField({ label, value, onChange }: { label: string; value: number; o
 
 function MiBField({ value, onChange }: { value: number; onChange: (value: number) => void }) {
   return <div className="field"><label>最大下载量 (MiB)</label><Input type="number" aria-label="最大下载量" value={String(value / 1048576)} min={1} max={1024} onChange={(event) => onChange(Math.round(Number(event.target.value) * 1048576))} /><small>1 – 1024</small></div>;
+}
+
+function BandwidthField({label,value,description,onChange}:{label:string;value:number;description:string;onChange:(value:number)=>void}){
+  return <div className="field"><label>{label} (Mbps)</label><Input type="number" aria-label={label}
+    value={value===0?"":String(value)} placeholder="0" min={0} step="any"
+    onChange={event=>onChange(Number(event.target.value))}/><small>{description}</small></div>;
 }
 
 function BandwidthTestPresetField({ value, onChange, isH3 }: { value: string; onChange: (value: string) => void; isH3: boolean }) {

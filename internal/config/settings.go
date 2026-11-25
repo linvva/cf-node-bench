@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"slices"
@@ -37,6 +38,8 @@ type Settings struct {
 	BandwidthCandidates      int                `json:"bandwidthCandidates"`
 	FinalResultCount         int                `json:"finalResultCount"`
 	MaxDownloadBytes         int64              `json:"maxDownloadBytes"`
+	MinBandwidthMbps         float64            `json:"minBandwidthMbps"`
+	LineBandwidthMbps        float64            `json:"lineBandwidthMbps"`
 	BandwidthTestURL         string             `json:"bandwidthTestUrl"`
 	RetainPreviousResults    bool               `json:"retainPreviousResults"`
 	ScoreWeights             model.ScoreWeights `json:"scoreWeights"`
@@ -139,6 +142,15 @@ func (s Settings) Validate() error {
 	}
 	if s.MaxDownloadBytes < 64*1024 || s.MaxDownloadBytes > 1024*1024*1024 {
 		return fmt.Errorf("最大下载字节数必须在 64 KiB 到 1 GiB 之间")
+	}
+	if s.MinBandwidthMbps < 0 || math.IsNaN(s.MinBandwidthMbps) || math.IsInf(s.MinBandwidthMbps, 0) {
+		return fmt.Errorf("最低节点带宽必须为有限的非负数")
+	}
+	if s.LineBandwidthMbps < 0 || math.IsNaN(s.LineBandwidthMbps) || math.IsInf(s.LineBandwidthMbps, 0) {
+		return fmt.Errorf("线路带宽上限必须为有限的非负数")
+	}
+	if s.LineBandwidthMbps > 0 && s.LineBandwidthMbps < s.MinBandwidthMbps {
+		return fmt.Errorf("线路带宽上限不能低于最低节点带宽")
 	}
 	if err := validateBandwidthTestURL(s.BandwidthTestURL); err != nil {
 		return err

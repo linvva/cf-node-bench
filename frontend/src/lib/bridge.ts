@@ -32,7 +32,7 @@ let mockCheckpointSettings:Settings|undefined;
 let mockRunSettings:Settings|undefined;
 
 export const DEFAULT_VERIFICATION_HOST="h3.speed.cloudflare.com";
-export const defaultSettings: Settings = {requireH3:false,verificationHost:"",h3ConnectTimeoutMs:3000,h3RequestTimeoutMs:6000,h3BandwidthTestUrl:DEFAULT_H3_BANDWIDTH_TEST_URL,connectionConcurrency:64,httpConcurrency:16,connectionProbeCount:3,httpProbeCount:3,connectionMinSuccessRate:2/3,httpMinSuccessRate:2/3,httpCandidateCount:150,bandwidthConcurrency:3,connectTimeoutMs:1200,requestTimeoutMs:4000,bandwidthTimeoutMs:12000,sourceTimeoutMs:10000,sourceRetries:2,bandwidthCandidates:30,finalResultCount:15,maxDownloadBytes:20971520,bandwidthTestUrl:DEFAULT_BANDWIDTH_TEST_URL,retainPreviousResults:true,scoreWeights:DEFAULT_SCORE_WEIGHTS,allowedPorts:[443,8443,2053,2083,2087,2096],allowedCountries:[],blockedCountries:[]};
+export const defaultSettings: Settings = {requireH3:false,verificationHost:"",h3ConnectTimeoutMs:3000,h3RequestTimeoutMs:6000,h3BandwidthTestUrl:DEFAULT_H3_BANDWIDTH_TEST_URL,connectionConcurrency:64,httpConcurrency:16,connectionProbeCount:3,httpProbeCount:3,connectionMinSuccessRate:2/3,httpMinSuccessRate:2/3,httpCandidateCount:150,bandwidthConcurrency:3,connectTimeoutMs:1200,requestTimeoutMs:4000,bandwidthTimeoutMs:12000,sourceTimeoutMs:10000,sourceRetries:2,bandwidthCandidates:30,finalResultCount:15,maxDownloadBytes:20971520,minBandwidthMbps:0,lineBandwidthMbps:0,bandwidthTestUrl:DEFAULT_BANDWIDTH_TEST_URL,retainPreviousResults:true,scoreWeights:DEFAULT_SCORE_WEIGHTS,allowedPorts:[443,8443,2053,2083,2087,2096],allowedCountries:[],blockedCountries:[]};
 export const effectiveVerificationHost=(settings:Settings)=>settings.verificationHost.trim().toLowerCase().replace(/\.$/,"")||DEFAULT_VERIFICATION_HOST;
 export const defaultPublishSettings: PublishSettingsView = {
   output:{format:"compact",country:true,tcpP95:false,httpLatency:true,bandwidth:true},
@@ -114,11 +114,20 @@ const startIndexFor=(plan:StageProgress[],stage:RunStartStage)=>stage==="source"
 const mockDomain:Candidate={addressType:"domain",host:"edge.example.com",ip:"",port:443,country:"JP"};
 const h3MockCandidates=():Candidate[]=>mockData.sources.some(source=>source.enabled)?[mockDomain,...mockCandidates].filter(mockFreshCandidate).filter(mockCandidateAllowed):[];
 const mockDownloadPool=(available:number,scheduled:number)=>Math.min(available,Math.max(1,Math.ceil(scheduled/currentMockSettings().httpCandidateCount))*currentMockSettings().httpCandidateCount);
+const mockTCPBandwidth=(index:number)=>186-index*8.5;
+const mockH3Bandwidth=(index:number)=>160-index*4;
+function mockBandwidthQualified(available:number, bandwidth:(index:number)=>number){
+  const minimum=currentMockSettings().minBandwidthMbps;
+  return minimum===0?available:Array.from({length:available},(_,index)=>bandwidth(index)).filter(mbps=>mbps>=minimum).length;
+}
 function h3MockPlan():StageProgress[]{
   const s=currentMockSettings(); const n=h3MockCandidates().length;
-  const passed=Math.max(0,n-4), bandwidth=Math.min(passed,s.bandwidthCandidates), selected=mockDownloadPool(passed,bandwidth), final=Math.min(bandwidth,s.finalResultCount);
-  const values:[string,number,number,number][]=[["source",mockData.sources.filter(source=>source.enabled).length,mockData.sources.filter(source=>source.enabled).length,0],["filter",n,n,0],["dns",n,n,0],["quic",n,passed,s.connectionProbeCount],["http3",passed,passed,s.httpProbeCount],["bandwidth",bandwidth,bandwidth,1],["ranking",bandwidth,final,0]];
-  const plan:StageProgress[]=values.map(([name,input,passed,attempts])=>({name,input,passed,failed:input-passed,attemptsCompleted:input*attempts,attemptsTotal:input*attempts,durationMs:input?850:0,state:"completed" as const,...(name==="http3"?{selected}:{}),...(name==="bandwidth"?{queue:{pool:selected,target:s.bandwidthCandidates,planned:bandwidth,active:0,pending:0,passed:bandwidth}}:{})}));
+  const passed=Math.max(0,n-4);
+  const bandwidth=Math.min(mockBandwidthQualified(passed,mockH3Bandwidth),s.bandwidthCandidates);
+  const planned=bandwidth===s.bandwidthCandidates?bandwidth:passed;
+  const selected=mockDownloadPool(passed,planned), final=Math.min(bandwidth,s.finalResultCount);
+  const values:[string,number,number,number][]=[["source",mockData.sources.filter(source=>source.enabled).length,mockData.sources.filter(source=>source.enabled).length,0],["filter",n,n,0],["dns",n,n,0],["quic",n,passed,s.connectionProbeCount],["http3",passed,passed,s.httpProbeCount],["bandwidth",planned,bandwidth,1],["ranking",bandwidth,final,0]];
+  const plan:StageProgress[]=values.map(([name,input,passed,attempts])=>({name,input,passed,failed:input-passed,attemptsCompleted:input*attempts,attemptsTotal:input*attempts,durationMs:input?850:0,state:"completed" as const,...(name==="http3"?{selected}:{}),...(name==="bandwidth"?{queue:{pool:selected,target:s.bandwidthCandidates,planned,active:0,pending:0,passed:bandwidth}}:{})}));
   const start=startIndexFor(plan,mockStartStage);
   return plan.map((stage,index)=>index<start?{...stage,state:"reused" as const,measuredAt:mockData.resume.updatedAt}:stage);
 }
@@ -130,7 +139,7 @@ function h3MockResults():ProbeResult[]{
   return candidates.map((candidate,index)=>{
     const quic={attempts:3,successes:3,successRate:1,averageMs:31+index,p50Ms:30+index,p95Ms:36+index,jitterMs:3,failures:{}};
     const http3={...quic,averageMs:55+index,p50Ms:53+index,p95Ms:60+index,jitterMs:4};
-    const bandwidth={bytes:settings.maxDownloadBytes,ttfbMs:58+index,durationMs:1000,mbps:160-index*4};
+    const bandwidth={bytes:settings.maxDownloadBytes,ttfbMs:58+index,durationMs:1000,mbps:mockH3Bandwidth(index)};
     const ips=candidate.addressType==="domain"?["192.0.2.10","192.0.2.11"]:[candidate.ip];
     const empty={attempts:0,successes:0,successRate:0,averageMs:0,p50Ms:0,p95Ms:0,jitterMs:0,failures:{}};
     return {mode:"h3",candidate,tcp:empty,https:empty,quic,http3,bandwidth:{...bandwidth,bytes:bandwidth.bytes*ips.length},score:95-index*3,parts:{tcp:0,https:0,quic:95-index,http3:95-index,jitter:90,reliability:100,bandwidth:100-index*5},status:"qualified",resolvedAt:(reuseDNS?checkpoint?.results.find(result=>result.candidate.ip===candidate.ip&&result.candidate.host===candidate.host&&result.candidate.port===candidate.port)?.resolvedAt:undefined)??new Date().toISOString(),endpoints:ips.map(ip=>({ip,quic,http3,bandwidth}))};
@@ -165,16 +174,20 @@ function mockPlan(): StageProgress[] {
   const seenRetained=new Set<string>();
   const retainedInput=retained.filter(result=>{const key=`${result.candidate.ip}:${result.candidate.port}`;if(seenRetained.has(key))return false;seenRetained.add(key);return mockCandidateAllowed(freshByKey.get(key)??result.candidate);}).length;
   const retainedFailed=Math.min(1,retainedInput); const retainedPassed=retainedInput-retainedFailed;
-  const target=settings.bandwidthCandidates,freshInput=Math.min(httpsPassed,target+1),bandwidthFailed=Math.min(1,freshInput),selected=mockDownloadPool(httpsPassed,freshInput);
+  const target=settings.bandwidthCandidates;
+  const freshPassed=Math.min(mockBandwidthQualified(Math.max(0,httpsPassed-1),mockTCPBandwidth),target);
+  const freshInput=freshPassed===target?Math.min(httpsPassed,target+1):httpsPassed;
+  const selected=mockDownloadPool(httpsPassed,freshInput);
   const bandwidthInput=freshInput+retainedPassed;
-  const rankingPassed=Math.min(bandwidthInput-bandwidthFailed,settings.finalResultCount);
+  const bandwidthPassed=mockBandwidthQualified(freshPassed+retainedPassed,mockTCPBandwidth);
+  const rankingPassed=Math.min(bandwidthPassed,settings.finalResultCount);
   const plan:StageProgress[]=[
     {name:"source",input:mockData.sources.filter(source=>source.enabled).length,passed:mockData.sources.filter(source=>source.enabled).length,failed:0,durationMs:180,state:"completed"},
     {name:"filter",input:freshCandidates.length+2,passed:filtered.length,failed:2+portFailed+countryFailed,durationMs:24,state:"completed"},
     {name:"tcp",input:filtered.length,passed:tcpPassed,failed:tcpFailed,attemptsCompleted:filtered.length*settings.connectionProbeCount,attemptsTotal:filtered.length*settings.connectionProbeCount,durationMs:1480,state:"completed"},
     {name:"https",input:httpsInput,passed:httpsPassed,failed:httpsFailed,selected,attemptsCompleted:httpsInput*settings.httpProbeCount,attemptsTotal:httpsInput*settings.httpProbeCount,durationMs:1760,state:"completed"},
     {name:"retained",input:retainedInput,passed:retainedPassed,failed:retainedFailed,attemptsCompleted:retainedInput,attemptsTotal:retainedInput,durationMs:retainedInput?420:0,state:"completed"},
-    {name:"bandwidth",input:bandwidthInput,passed:bandwidthInput-bandwidthFailed,failed:bandwidthFailed,queue:{pool:selected,target,planned:freshInput,active:0,pending:0,passed:freshInput-bandwidthFailed},attemptsCompleted:bandwidthInput,attemptsTotal:bandwidthInput,durationMs:1930,state:"completed"},
+    {name:"bandwidth",input:bandwidthInput,passed:bandwidthPassed,failed:bandwidthInput-bandwidthPassed,queue:{pool:selected,target,planned:freshInput,active:0,pending:0,passed:freshPassed},attemptsCompleted:bandwidthInput,attemptsTotal:bandwidthInput,durationMs:1930,state:"completed"},
     {name:"ranking",input:bandwidthInput,passed:rankingPassed,failed:bandwidthInput-rankingPassed,durationMs:28,state:"completed"},
   ];
   const startIndex=startIndexFor(plan,mockStartStage);
@@ -214,7 +227,12 @@ function mockProgressStages(plan:StageProgress[],completed:number):StageProgress
 
 function mockFailures(plan: StageProgress[], completed: number): Partial<Record<FailureReason,number>> {
   const failures:Partial<Record<FailureReason,number>>={};
-  if(currentMockSettings().requireH3){for(const stage of plan.slice(0,completed)){if(stage.name==="quic")failures.quic_timeout=stage.failed;}return failures;}
+  const download=plan.slice(0,completed).find(stage=>stage.name==="bandwidth");
+  if(currentMockSettings().requireH3){
+    for(const stage of plan.slice(0,completed)){if(stage.name==="quic")failures.quic_timeout=stage.failed;}
+    if(download?.failed)failures.bandwidth_below_minimum=download.failed;
+    return failures;
+  }
   if(completed>1){
     const settings=currentMockSettings();
     const retained=settings.retainPreviousResults?(mockData.history.find(summary=>summary.state==="completed"&&(summary.mode??"tcp_https")==="tcp_https")?.results??[]).filter(result=>result.candidate.addressType==="ipv4"&&mockFreshCandidate(result.candidate)):[];
@@ -229,7 +247,11 @@ function mockFailures(plan: StageProgress[], completed: number): Partial<Record<
   if(completed>2&&plan[2].failed)failures.timeout=plan[2].failed;
   if(completed>3&&plan[3].failed)failures.tls=plan[3].failed;
   if(completed>4&&plan[4].failed)failures.tls=(failures.tls??0)+plan[4].failed;
-  if(completed>5&&plan[5].failed)failures.download=plan[5].failed;
+  if(download?.failed){
+    const otherFailures=download.queue?.planned?1:0;
+    if(otherFailures)failures.download=otherFailures;
+    if(download.failed>otherFailures)failures.bandwidth_below_minimum=download.failed-otherFailures;
+  }
   return failures;
 }
 
@@ -242,6 +264,9 @@ function mockResultsWithPinned(results:ProbeResult[]):ProbeResult[]{
     };
     const result={...structuredClone(previous),candidate:structuredClone(node.candidate),mode:node.mode,pinned:true};
     if(node.mode==="h3")result.resolvedAt=new Date().toISOString();
+    for(const stats of [result.bandwidth,...(result.endpoints??[]).map(endpoint=>endpoint.bandwidth)]){
+      if(stats.mbps>0&&stats.mbps<settings.minBandwidthMbps&&!stats.failure)stats.failure="bandwidth_below_minimum";
+    }
     const connection=node.mode==="h3"?result.quic:result.tcp,http=node.mode==="h3"?result.http3:result.https;
     const passed=(connection?.successRate??0)>=settings.connectionMinSuccessRate&&(http?.successRate??0)>=settings.httpMinSuccessRate&&result.bandwidth.mbps>0&&!result.bandwidth.failure;
     result.status=passed?"qualified":"failed_gate";
@@ -263,7 +288,7 @@ function mockResults(runId=mockRunId, startedAt=mockStartedAt, completed=mockPla
     candidate,
     tcp:{attempts:3,successes:3,successRate:1,averageMs:18+index*2.1,p50Ms:17+index*2,p95Ms:22+index*2.4,jitterMs:2+index*.2,failures:{}},
     https:{attempts:3,successes:index===8?2:3,successRate:index===8?2/3:1,averageMs:44+index*3,p50Ms:42+index*3,p95Ms:51+index*3.4,jitterMs:3.2+index*.35,failures:index===8?{timeout:1}:{}},
-    bandwidth:{bytes:20971520,ttfbMs:39+index*2,durationMs:900+index*85,mbps:186-index*8.5},
+    bandwidth:{bytes:20971520,ttfbMs:39+index*2,durationMs:900+index*85,mbps:mockTCPBandwidth(index)},
     score:96.2-index*3.7,parts:{tcp:98-index*2,https:96-index*2.4,jitter:94-index*2,reliability:index===8?83:100,bandwidth:100-index*5},status:"qualified",
   }));
   const passed=mockProgressStages(plan,completed).find(stage=>stage.name==="bandwidth")?.passed??0;
@@ -279,12 +304,13 @@ function mockResume(summary:RunSummary):ResumeInfo{
   const connectionChanged=(h3?checkpoint.h3ConnectTimeoutMs!==settings.h3ConnectTimeoutMs:checkpoint.connectTimeoutMs!==settings.connectTimeoutMs)||checkpoint.connectionProbeCount!==settings.connectionProbeCount||checkpoint.connectionMinSuccessRate!==settings.connectionMinSuccessRate||JSON.stringify([checkpoint.allowedPorts,checkpoint.allowedCountries,checkpoint.blockedCountries])!==JSON.stringify([settings.allowedPorts,settings.allowedCountries,settings.blockedCountries]);
   const httpChanged=(h3?checkpoint.h3RequestTimeoutMs!==settings.h3RequestTimeoutMs:checkpoint.requestTimeoutMs!==settings.requestTimeoutMs)||checkpoint.httpProbeCount!==settings.httpProbeCount||checkpoint.httpMinSuccessRate!==settings.httpMinSuccessRate;
   const bandwidthChanged=checkpoint.bandwidthTimeoutMs!==settings.bandwidthTimeoutMs||checkpoint.maxDownloadBytes!==settings.maxDownloadBytes||checkpoint.bandwidthCandidates!==settings.bandwidthCandidates||(h3?checkpoint.h3BandwidthTestUrl!==settings.h3BandwidthTestUrl:checkpoint.bandwidthTestUrl!==settings.bandwidthTestUrl);
-  const warnings=(stage:RunStartStage)=>[stage!==connection&&connectionChanged?"连接测量或候选过滤设置已变化":"",(stage==="bandwidth"||stage==="ranking")&&httpChanged?"HTTP 测量设置已变化":"",stage==="ranking"&&bandwidthChanged?"带宽测量设置已变化":""].filter(Boolean);
+  const thresholdChanged=checkpoint.minBandwidthMbps!==settings.minBandwidthMbps||(settings.minBandwidthMbps>0&&checkpoint.lineBandwidthMbps!==settings.lineBandwidthMbps);
+  const warnings=(stage:RunStartStage)=>[stage!==connection&&connectionChanged?"连接测量或候选过滤设置已变化":"",(stage==="bandwidth"||stage==="ranking")&&httpChanged?"HTTP 测量设置已变化":"",stage==="ranking"&&bandwidthChanged?"带宽测量设置已变化":"",stage==="ranking"&&thresholdChanged?"带宽门槛或线路上限已变化，请从带宽阶段重测":""].filter(Boolean);
   const measuredAt=summary.finishedAt;
   const names=[connection,http,"bandwidth","ranking"] as const;
   const plan=mockPlan();
   const completed=summary.state==="completed"?plan.length:mockCompleted;
-  return {baseRunId:summary.runId,updatedAt:measuredAt,options:names.map(stage=>({stage,input:plan.find(item=>item.name===stage)?.input??0,available:startIndexFor(plan,stage)<=completed&&(!changed||stage===connection),measuredAt,warnings:changed&&stage!==connection?["H3 要求或验证域名已变化，需要重新探测连接"]:warnings(stage)}))};
+  return {baseRunId:summary.runId,updatedAt:measuredAt,options:names.map(stage=>({stage,input:plan.find(item=>item.name===stage)?.input??0,available:startIndexFor(plan,stage)<=completed&&(!changed||stage===connection)&&!(stage==="ranking"&&thresholdChanged),measuredAt,warnings:changed&&stage!==connection?["H3 要求或验证域名已变化，需要重新探测连接"]:warnings(stage)}))};
 }
 
 function normalizePublishSettings(value?:PublishSettingsView):PublishSettingsView {

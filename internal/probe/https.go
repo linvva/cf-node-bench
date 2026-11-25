@@ -93,6 +93,7 @@ type BandwidthProber struct {
 	RootCAs        *x509.CertPool
 	Path           string
 	URL            string
+	Threshold      BandwidthThreshold
 }
 
 func (p BandwidthProber) Probe(ctx context.Context, candidate model.Candidate) model.BandwidthStats {
@@ -107,6 +108,8 @@ func (p BandwidthProber) Probe(ctx context.Context, candidate model.Candidate) m
 		targetURL = "https://" + speedHost + path
 	}
 	started := time.Now()
+	testCtx, stopAtThreshold := p.Threshold.withDeadline(testCtx, started, p.MaxBytes)
+	defer stopAtThreshold()
 	var firstByte time.Time
 	req, err := http.NewRequestWithContext(testCtx, http.MethodGet, targetURL, nil)
 	if err != nil {
@@ -130,6 +133,12 @@ func (p BandwidthProber) Probe(ctx context.Context, candidate model.Candidate) m
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return model.BandwidthStats{Failure: classify(ctx, ctx.Err())}
+		}
+		if bandwidthCutShort(ctx, testCtx, err) {
+			return model.BandwidthStats{DurationMS: milliseconds(time.Since(started)), Failure: model.FailureBandwidthBelowMin}
+		}
 		if errors.Is(err, errRejectedRedirect) {
 			return model.BandwidthStats{Failure: model.FailureDownload}
 		}
@@ -139,7 +148,7 @@ func (p BandwidthProber) Probe(ctx context.Context, candidate model.Candidate) m
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return model.BandwidthStats{Failure: model.FailureHTTPStatus}
 	}
-	bytesRead, err := io.Copy(io.Discard, io.LimitReader(resp.Body, p.MaxBytes))
+	bytesRead, err := p.Threshold.read(testCtx, resp.Body, started, p.MaxBytes)
 	duration := time.Since(started)
 	stats := model.BandwidthStats{Bytes: bytesRead, DurationMS: float64(duration.Microseconds()) / 1000}
 	if !firstByte.IsZero() {
@@ -148,8 +157,15 @@ func (p BandwidthProber) Probe(ctx context.Context, candidate model.Candidate) m
 	if duration > 0 {
 		stats.Mbps = float64(bytesRead*8) / duration.Seconds() / 1_000_000
 	}
-	if err != nil {
+	if err != nil && ctx.Err() != nil {
+		stats.Failure = classify(ctx, ctx.Err())
+	} else if bandwidthCutShort(ctx, testCtx, err) {
+		stats.Mbps = 0
+		stats.Failure = model.FailureBandwidthBelowMin
+	} else if err != nil {
 		stats.Failure = classify(testCtx, err)
+	} else if stats.Mbps < p.Threshold.MinMbps {
+		stats.Failure = model.FailureBandwidthBelowMin
 	}
 	return stats
 }

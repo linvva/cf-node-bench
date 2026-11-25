@@ -44,7 +44,7 @@ it("uses only native dropped paths once, locks the running mode, and labels loca
   expect(await screen.findByRole("heading",{name:"测速工作台"})).toBeInTheDocument();
   expect(screen.getByRole("tab",{name:"H3"})).toHaveAttribute("aria-disabled","true");
   expect(getAppState().progress).toMatchObject({localFiles:true,mode:"h3"});
-  expect(screen.getByLabelText("候选路径")).toHaveTextContent("测试本批文件候选，并额外保留当前模式固化节点");
+  expect(screen.getByLabelText("候选路径")).toHaveTextContent("保留节点与新节点共同完成 QUIC 和 HTTP/3 验证");
   await act(async()=>events["files:dropped"]?.(["other.json"]));expect(api.StartLocalFiles).toHaveBeenCalledTimes(1);
   const summary:RunSummary={runId:"local-1",localFiles:true,mode:"h3",state:"completed",results:[],failures:{},publications:[],scoreWeights:data.settings.scoreWeights,reusedStages:[],startedAt:new Date().toISOString(),finishedAt:new Date().toISOString()};
   data.history=[summary];data.currentResultRunId=summary.runId;

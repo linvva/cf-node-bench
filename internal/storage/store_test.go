@@ -15,6 +15,27 @@ import (
 	"github.com/linvva/cf-node-bench/internal/source"
 )
 
+func TestBandwidthThresholdPersistsAcrossReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.json")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := store.Settings()
+	settings.MinBandwidthMbps, settings.LineBandwidthMbps = 80.5, 100
+	if err := store.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := reopened.Settings()
+	if saved.MinBandwidthMbps != 80.5 || saved.LineBandwidthMbps != 100 {
+		t.Fatalf("bandwidth settings lost after reopen: %+v", saved)
+	}
+}
+
 func TestCheckpointPersistsAcrossStoreReopen(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(filepath.Join(dir, "data.json"))

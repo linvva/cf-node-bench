@@ -8,7 +8,7 @@ import { HistoryChart } from "./HistoryChart";
 import { ProtocolTabs } from "../ProtocolTabs";
 
 const tcpStages=[{id:"source",label:"数据源",activity:"获取数据源"},{id:"filter",label:"解析 / 过滤",activity:"解析与过滤"},{id:"tcp",label:"TCP",activity:"TCP 探测"},{id:"https",label:"HTTPS",activity:"HTTPS 探测"},{id:"retained",label:"保留复检",activity:"复检上轮结果"},{id:"bandwidth",label:"带宽",activity:"带宽测试"},{id:"ranking",label:"排序",activity:"综合排序"}];
-const failureLabels:Record<string,string>={invalid_ip:"无效 IP",invalid_port:"无效端口",invalid_tag:"无效标签",port_filtered:"端口排除",country_filtered:"国家排除",dns:"DNS",quic:"QUIC",quic_timeout:"QUIC 超时",protocol:"协议协商",tcp:"TCP",tls:"TLS",timeout:"超时",http_status:"HTTP 状态",cancelled:"已取消",download:"下载"};
+const failureLabels:Record<string,string>={invalid_ip:"无效 IP",invalid_port:"无效端口",invalid_tag:"无效标签",port_filtered:"端口排除",country_filtered:"国家排除",dns:"DNS",quic:"QUIC",quic_timeout:"QUIC 超时",protocol:"协议协商",tcp:"TCP",tls:"TLS",timeout:"超时",http_status:"HTTP 状态",cancelled:"已取消",download:"下载",bandwidth_below_minimum:"带宽未达门槛"};
 
 export function RunWorkspace(){
   const network=useAppStore(state=>state.network); const running=useAppStore(state=>state.running); const summary=useAppStore(state=>state.current); const history=useAppStore(state=>state.history); const sources=useAppStore(state=>state.sources); const resume=useAppStore(state=>state.resume);
@@ -113,7 +113,7 @@ function RunProgressPanels(){
       {checkpointWarning&&<div className="checkpoint-save-warning" role="status"><AlertTriangle size={14}/>{checkpointWarning}</div>}
     </section>
     <div className="run-insights">
-      <section className="panel candidate-panel" aria-label="候选路径"><div className="insight-heading"><div><h2>候选路径</h2><span>{localFiles?"测试本批文件候选，并额外保留当前模式固化节点":isH3?"保留节点与新节点共同完成 QUIC 和 HTTP/3 验证":"新节点与上轮结果在带宽阶段汇合"}</span></div></div><div className="candidate-paths"><CandidateLane label={isH3?"全部候选":"新节点"} items={freshPath}/>{!isH3&&<><Plus className="path-operator" size={15}/><CandidateLane label="上轮保留" items={retainedPath}/></>}<GitMerge className="path-operator" size={15}/><CandidateLane label="汇合结果" items={mergedPath}/></div></section>
+      <section className="panel candidate-panel" aria-label="候选路径"><div className="insight-heading"><div><h2>候选路径</h2><span>{isH3?"保留节点与新节点共同完成 QUIC 和 HTTP/3 验证":"新节点与上轮结果在带宽阶段汇合"}</span></div></div><div className="candidate-paths"><CandidateLane label={isH3?"全部候选":"新节点"} items={freshPath}/>{!isH3&&<><Plus className="path-operator" size={15}/><CandidateLane label="上轮保留" items={retainedPath}/></>}<GitMerge className="path-operator" size={15}/><CandidateLane label="汇合结果" items={mergedPath}/></div></section>
       <aside className="panel failure-panel"><div className="insight-heading"><div><h2>本轮失败</h2><span>{failureTotal?`${formatCount(failureTotal)} 条失败记录`:"当前没有失败记录"}</span></div></div>{failureEntries.length?<div className="failure-bars">{failureEntries.slice(0,4).map(([reason,count])=><div className="failure-row" key={reason}><span>{failureLabels[reason]||reason}</span><i><b style={{width:`${Math.max(4,count/failureMax*100)}%`}}/></i><strong>{formatCount(count)}</strong></div>)}</div>:<div className="empty-note"><ShieldCheck size={15}/> 尚无失败记录</div>}</aside>
     </div>
   </div>;

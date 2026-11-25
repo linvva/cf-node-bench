@@ -10,6 +10,49 @@ import (
 	"github.com/linvva/cf-node-bench/internal/source"
 )
 
+func TestBandwidthThresholdChangeRequiresBandwidthRetest(t *testing.T) {
+	for _, h3 := range []bool{false, true} {
+		engine, current, _, connection, http, bandwidth := h3Fixture([]model.Candidate{{IP: "192.0.2.1", Port: 443}})
+		current.RequireH3 = h3
+		t.Run(string(current.ProbeMode()), func(t *testing.T) {
+			engine.Dependencies.TCP, engine.Dependencies.HTTPS, engine.Dependencies.Bandwidth = connection, http, bandwidth
+			input := h3RunInput()
+			var base Checkpoint
+			input.Plan.Save = func(c Checkpoint) error { base = c; return nil }
+			for _, minimum := range []float64{0, 50} {
+				current.MinBandwidthMbps = minimum
+				engine.Run(t.Context(), "original", current, input, nil)
+				for _, next := range []struct {
+					min, line float64
+					restart   bool
+				}{
+					{minimum, 0, false},
+					{minimum, 100, minimum > 0},
+					{25, 0, true},
+					{100, 0, true},
+					{0, 0, minimum > 0},
+				} {
+					changed := current
+					changed.MinBandwidthMbps, changed.LineBandwidthMbps = next.min, next.line
+					info := BuildResumeInfo(base, base.RunID, changed, input.Sources, NetworkSnapshot{}, time.Now())
+					bandwidthOption, rankingOption := info.Options[2], info.Options[3]
+					if !bandwidthOption.Available || rankingOption.Available == next.restart ||
+						next.restart && !strings.Contains(strings.Join(rankingOption.Warnings, ""), "带宽阶段重测") {
+						t.Fatalf("minimum=%v, next=%+v: %+v", minimum, next, info.Options)
+					}
+					want := StageRanking
+					if next.restart {
+						want = StageBandwidth
+					}
+					if got := runStartStage(StageRanking, changed, &base); got != want {
+						t.Fatalf("resume stage = %s, want %s", got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestBuildResumeInfoRequiresCurrentCompleteData(t *testing.T) {
 	settings := config.DefaultSettings()
 	now := time.Now()

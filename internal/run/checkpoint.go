@@ -315,6 +315,13 @@ func earlyStoppedRestartStage(c Checkpoint, settings config.Settings, start stri
 			return stage
 		}
 	}
+	if start == StageRanking {
+		previous := stageSettings(c, StageBandwidth)
+		if previous.MinBandwidthMbps != settings.MinBandwidthMbps ||
+			(settings.MinBandwidthMbps > 0 && previous.LineBandwidthMbps != settings.LineBandwidthMbps) {
+			return StageBandwidth
+		}
+	}
 	return ""
 }
 
@@ -343,6 +350,9 @@ func checkpointHasSkippedSamples(c Checkpoint, stage string) bool {
 }
 
 func earlyStoppedRestartWarning(stage string) string {
+	if stage == StageBandwidth {
+		return "带宽门槛或线路上限已变化，请从带宽阶段重测"
+	}
 	label := map[string]string{StageTCP: "TCP", StageHTTPS: "HTTPS", StageQUIC: "QUIC", StageHTTP3: "HTTP/3"}[stage]
 	return label + " 存在提前淘汰的未完成采样；降低成功率门槛或改变采样次数后，必须从该阶段重新探测"
 }

@@ -55,10 +55,11 @@ type App struct {
 func NewApp(store *storage.Store) *App {
 	settings := store.Settings()
 	app := &App{store: store, publish: publish.NewService(), engine: runengine.Engine{Dependencies: runengine.Dependencies{
-		Fetcher:   newTrackingFetcher(store, settings),
-		TCP:       probe.TCPProber{Timeout: settings.ConnectTimeout()},
-		HTTPS:     probe.HTTPSProber{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout()},
-		Bandwidth: probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.BandwidthTestURL},
+		Fetcher: newTrackingFetcher(store, settings),
+		TCP:     probe.TCPProber{Timeout: settings.ConnectTimeout()},
+		HTTPS:   probe.HTTPSProber{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout()},
+		Bandwidth: probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.BandwidthTestURL,
+			Threshold: probe.BandwidthThreshold{MinMbps: settings.MinBandwidthMbps, LineMbps: settings.LineBandwidthMbps}},
 	}}}
 	app.queue = publish.NewCoordinator(app.publish, app.handlePublishUpdate)
 	return app
@@ -278,10 +279,11 @@ func (a *App) startRun(request runengine.StartRequest, paths []string) (string, 
 	a.engine.Dependencies.Fetcher = newTrackingFetcher(a.store, settings)
 	a.engine.Dependencies.TCP = probe.TCPProber{Timeout: settings.ConnectTimeout(), MinSuccessRate: settings.ConnectionMinSuccessRate}
 	a.engine.Dependencies.HTTPS = probe.HTTPSProber{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout(), MinSuccessRate: settings.HTTPMinSuccessRate}
-	a.engine.Dependencies.Bandwidth = probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.BandwidthTestURL}
+	bandwidthThreshold := probe.BandwidthThreshold{MinMbps: settings.MinBandwidthMbps, LineMbps: settings.LineBandwidthMbps}
+	a.engine.Dependencies.Bandwidth = probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.BandwidthTestURL, Threshold: bandwidthThreshold}
 	a.engine.Dependencies.QUIC = probe.QUICProber{Timeout: settings.ConnectTimeout(), WorkerHost: settings.EffectiveVerificationHost(), MinSuccessRate: settings.ConnectionMinSuccessRate}
 	a.engine.Dependencies.HTTP3 = probe.HTTP3Prober{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout(), WorkerHost: settings.EffectiveVerificationHost(), MinSuccessRate: settings.HTTPMinSuccessRate}
-	a.engine.Dependencies.H3Bandwidth = probe.H3BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.EffectiveBandwidthTestURL()}
+	a.engine.Dependencies.H3Bandwidth = probe.H3BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: settings.BandwidthTimeout(), MaxBytes: settings.MaxDownloadBytes, URL: settings.EffectiveBandwidthTestURL(), Threshold: bandwidthThreshold}
 	stage := request.StartStage
 	if stage == "" {
 		stage = runengine.StageSource
@@ -296,7 +298,7 @@ func (a *App) startRun(request runengine.StartRequest, paths []string) (string, 
 	networkSnapshot := runengine.NetworkSnapshot{Interface: network.Interface, IPv4: network.IPv4}
 	var base *runengine.Checkpoint
 	retained := []model.ProbeResult{}
-	if localFiles == nil && stage == runengine.StageSource && settings.RetainPreviousResults {
+	if stage == runengine.StageSource && settings.RetainPreviousResults {
 		for _, summary := range a.store.History() {
 			if summary.State == "completed" && model.NormalizeMode(summary.Mode) == settings.ProbeMode() && (!settings.RequireH3 || summary.WorkerHost == settings.EffectiveVerificationHost()) {
 				retained = summary.Results

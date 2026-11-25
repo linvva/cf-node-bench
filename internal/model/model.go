@@ -73,6 +73,7 @@ const (
 	FailureHTTPStatus           FailureReason = "http_status"
 	FailureCancelled            FailureReason = "cancelled"
 	FailureDownload             FailureReason = "download"
+	FailureBandwidthBelowMin    FailureReason = "bandwidth_below_minimum"
 	FailureQUIC                 FailureReason = "quic"
 	FailureQUICHandshakeTimeout FailureReason = "quic_timeout"
 	FailureProtocol             FailureReason = "protocol"

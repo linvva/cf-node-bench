@@ -57,7 +57,6 @@ type RunInput struct {
 func (e Engine) Run(ctx context.Context, runID string, settings config.Settings, input RunInput, emit func(model.RunProgress)) model.RunSummary {
 	if input.LocalFiles != nil {
 		input.Sources = nil
-		input.Retained = nil
 	}
 	settings.AllowedPorts = slices.Clone(settings.AllowedPorts)
 	settings.AllowedCountries = slices.Clone(settings.AllowedCountries)
