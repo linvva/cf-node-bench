@@ -25,7 +25,7 @@ describe("CF Node Bench workspace",()=>{
     expect(screen.getByLabelText("测速阶段").children).toHaveLength(7);
     fireEvent.click(screen.getByRole("button",{name:/取消测速/}));
     await waitFor(()=>expect(screen.getByRole("button",{name:/开始测速/})).toBeInTheDocument());
-    expect(screen.getByRole("heading",{name:"测速已取消"})).toBeInTheDocument();
+    expect(screen.getByText("测速已取消",{selector:".result-run-context span"})).toBeInTheDocument();
     expect(screen.getByLabelText("测速阶段").children[0]).toHaveAttribute("data-state","cancelled");
     expect(screen.getByLabelText("测速阶段").children[0]).toHaveTextContent("阶段未完成");
   });
@@ -35,13 +35,13 @@ describe("CF Node Bench workspace",()=>{
     fireEvent.click(screen.getByRole("button",{name:"设置"}));
     const tcp=await screen.findByLabelText("HTTP 候选批量");
     fireEvent.change(tcp,{target:{value:"10"}});
-    fireEvent.change(screen.getByLabelText("带宽目标通过数"),{target:{value:"30"}});
+    fireEvent.change(screen.getByLabelText("新节点达标目标"),{target:{value:"30"}});
     fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
     await waitFor(()=>expect(getAppState().settings.httpCandidateCount).toBe(10));
     expect(getAppState().settings.bandwidthCandidates).toBe(30);
     fireEvent.change(screen.getByLabelText("最终结果数"),{target:{value:"31"}});
     fireEvent.click(screen.getByRole("button",{name:/保存设置/}));
-    expect(await screen.findByText("最终结果数不能大于带宽目标通过数")).toBeInTheDocument();
+    expect(await screen.findByText("最终结果数不能大于新节点达标目标")).toBeInTheDocument();
   });
 
   it("shows advanced probe controls and rejects conflicting country filters",async()=>{
@@ -105,13 +105,14 @@ describe("CF Node Bench workspace",()=>{
   it("switches Cloudflare A and TXT controls with a shared format preview",async()=>{
     render(<App/>); await screen.findByRole("heading",{name:"测速工作台"});
     fireEvent.click(screen.getByRole("button",{name:"发布"}));
+    fireEvent.click(screen.getByText(/^配置 Cloudflare DNS · /));
     expect(await screen.findByRole("heading",{name:"结果发布"})).toBeInTheDocument();
     expect(screen.getByText("自动发布尚未生效")).toBeInTheDocument();
-    expect(screen.getByText(/启用渠道并配置目标、保存后生效/)).toBeInTheDocument();
+    expect(screen.getByRole("heading",{name:"最近可发布结果"})).toBeInTheDocument();
     expect(screen.getByText("启用 Cloudflare 代理")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab",{name:"TXT 记录"}));
     expect(screen.queryByText("启用 Cloudflare 代理")).not.toBeInTheDocument();
-    expect(screen.getByText("104.18.1.20:443#US|44ms|186M")).toBeInTheDocument();
+    expect(screen.getByText("104.18.1.20:443#🇺🇸美国|44ms|186M")).toBeInTheDocument();
   });
 
   it("validates an enabled publish target before saving",async()=>{
@@ -223,7 +224,7 @@ describe("CF Node Bench workspace",()=>{
     await screen.findByRole("heading",{name:"测速工作台"});
     fireEvent.click(screen.getByRole("button",{name:/开始测速/}));
     await screen.findByText("104.18.1.20:8443",{}, {timeout:8000});
-    const toggle=screen.getByRole("switch",{name:/全量测速时优先复检上轮结果/});
+    const toggle=screen.getByRole("switch",{name:"上轮节点复测"});
     expect(toggle).toBeChecked();
     const save=vi.spyOn(actions,"saveSettings");
     fireEvent.click(toggle);

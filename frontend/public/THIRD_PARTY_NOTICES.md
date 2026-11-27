@@ -1,16 +1,9 @@
 # Third-party notices
 
-## Twemoji Mozilla
+## Unicode CLDR
 
-CF Node Bench includes `Twemoji.Mozilla.ttf` from Mozilla's
-[`twemoji-colr`](https://github.com/mozilla/twemoji-colr) v0.7.0 release.
+CF Node Bench includes Simplified Chinese country and region names derived
+from Unicode CLDR 48.0.0, with a few common Chinese short names.
+[Source data](https://github.com/unicode-org/cldr-json/blob/48.0.0/cldr-json/cldr-localenames-full/main/zh/territories.json)
 
-The font-generation code is licensed under the Apache License 2.0.
-The Twemoji visual designs are copyright their respective contributors and are
-redistributed under the Creative Commons Attribution 4.0 International license
-(CC BY 4.0): https://creativecommons.org/licenses/by/4.0/
-
-The upstream license notice is included at `licenses/twemoji-colr-LICENSE.md`.
-The Apache License 2.0 text is included at `licenses/Apache-2.0.txt`.
-
-No endorsement by Mozilla or the Twemoji contributors is implied.
+The upstream Unicode License v3 is included at `licenses/Unicode-3.0.txt`.

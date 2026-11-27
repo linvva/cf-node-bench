@@ -57,6 +57,7 @@ describe("separate publication targets with shared credentials",()=>{
   it("edits one mode at a time, keeps shared credentials and never changes the run mode",async()=>{
     await actions.init();await actions.saveSettings(defaultSettings);await actions.savePublishSettings({...request(defaultPublishSettings),gistToken:"shared-token"});render(<App/>);await screen.findByRole("heading",{name:"测速工作台"});fireEvent.click(screen.getByRole("button",{name:"发布"}));
     const modes=screen.getByRole("tablist",{name:"发布目标模式"});const gistCard=screen.getByRole("heading",{name:"GitHub Gist"}).closest("section")!;const test=vi.spyOn(actions,"testPublishTarget").mockResolvedValue();
+    fireEvent.click(within(gistCard).getByText(/^配置 GitHub Gist · /));
     fireEvent.change(screen.getByLabelText("Gist ID",{exact:true}),{target:{value:"abc123"}});fireEvent.change(screen.getByLabelText("文件名",{exact:true}),{target:{value:"ip.txt"}});
     fireEvent.click(within(modes).getByRole("tab",{name:"H3"}));expect(screen.getByLabelText("Gist ID",{exact:true})).toHaveValue("");fireEvent.click(within(gistCard).getByRole("button",{name:"测试连接"}));await screen.findByText("H3 GitHub Gist 发布目标未配置");expect(test).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText("Gist ID",{exact:true}),{target:{value:"def456"}});fireEvent.change(screen.getByLabelText("文件名",{exact:true}),{target:{value:"h3.txt"}});expect(screen.getAllByLabelText("Gist Personal Access Token")).toHaveLength(1);
@@ -76,17 +77,17 @@ describe("publication output presets",()=>{
     if(isH3)fireEvent.click(within(screen.getByRole("tablist",{name:"发布目标模式"})).getByRole("tab",{name:"H3"}));
     const preview=()=>screen.getByLabelText("发布内容预览");
     const presets=()=>within(screen.getByRole("group",{name:"发布格式预设"}));
-    const compact=`104.18.1.20:443#US|${isH3?"H3|":""}44ms|186M`;
+    const compact=`104.18.1.20:443#🇺🇸美国|${isH3?"H3|":""}44ms|186M`;
     expect(preview()).toHaveTextContent(compact);
     expect(presets().getByRole("button",{name:"简洁（推荐）"})).toHaveAttribute("aria-pressed","true");
     fireEvent.click(presets().getByRole("button",{name:"极简"}));
-    expect(preview()).toHaveTextContent(`104.18.1.20:443#US${isH3?"|H3":""}`);
-    fireEvent.click(screen.getByRole("checkbox",{name:"国家代码"}));
+    expect(preview()).toHaveTextContent(`104.18.1.20:443#🇺🇸美国${isH3?"|H3":""}`);
+    fireEvent.click(screen.getByRole("checkbox",{name:"地区标签"}));
     expect(preview().textContent).toBe(`104.18.1.20:443${isH3?"#H3":""}`);
     fireEvent.click(presets().getByRole("button",{name:"详细"}));
-    expect(preview()).toHaveTextContent(`104.18.1.20:443#US|${isH3?"H3|QUIC22ms|HTTP344ms":"TCP22ms|HTTP44ms"}|186Mbps`);
+    expect(preview()).toHaveTextContent(`104.18.1.20:443#🇺🇸美国|${isH3?"H3|QUIC22ms|HTTP344ms":"TCP22ms|HTTP44ms"}|186Mbps`);
     fireEvent.click(presets().getByRole("button",{name:"简洁（推荐）"}));
-    fireEvent.click(screen.getByRole("checkbox",{name:"国家代码"}));
+    fireEvent.click(screen.getByRole("checkbox",{name:"地区标签"}));
     fireEvent.click(screen.getByRole("checkbox",{name:"连接 P95（TCP / QUIC）"}));
     fireEvent.click(screen.getByRole("checkbox",{name:"下载带宽"}));
     const custom=`104.18.1.20:443#${isH3?"H3|QUIC":"TCP"}22ms|44ms`;

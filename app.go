@@ -249,10 +249,64 @@ func (a *App) SelectLocalFiles() ([]string, error) {
 }
 
 func (a *App) StartLocalFiles(paths []string) (string, error) {
+	return a.StartLocalFilesWithStrategy(paths, false)
+}
+
+func (a *App) StartLocalFilesWithStrategy(paths []string, quick bool) (string, error) {
 	if len(paths) == 0 {
 		return "", fmt.Errorf("请选择节点文件")
 	}
-	return a.startRun(runengine.StartRequest{StartStage: runengine.StageSource}, paths)
+	return a.startRun(runengine.StartRequest{StartStage: runengine.StageSource, Quick: quick}, paths)
+}
+
+func downloadCheckProbe(settings config.Settings) runengine.BandwidthProbe {
+	budget := min(settings.BandwidthTimeout(), 3*time.Second)
+	if settings.RequireH3 {
+		return probe.H3BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: budget, MaxBytes: runengine.DownloadCheckBytes, URL: settings.EffectiveBandwidthTestURL()}
+	}
+	return probe.BandwidthProber{ConnectTimeout: settings.ConnectTimeout(), TotalTimeout: budget, MaxBytes: runengine.DownloadCheckBytes, URL: settings.EffectiveBandwidthTestURL()}
+}
+
+func (a *App) TestDownloadAddress(settings config.Settings) (model.DownloadCheck, error) {
+	settings.Normalize()
+	if err := settings.Validate(); err != nil {
+		return model.DownloadCheck{}, err
+	}
+	if a.manager.Current() != "" {
+		return model.DownloadCheck{}, runengine.ErrAlreadyRunning
+	}
+	var candidates []model.Candidate
+	add := func(results []model.ProbeResult) {
+		for _, result := range results {
+			if !settings.AllowsPort(result.Candidate.Port) || !settings.AllowsCountry(result.Candidate.Country) {
+				continue
+			}
+			if settings.RequireH3 && result.HTTP3.SuccessRate >= settings.HTTPMinSuccessRate {
+				for _, endpoint := range result.Endpoints {
+					candidates = append(candidates, model.Candidate{IP: endpoint.IP, Port: result.Candidate.Port})
+				}
+			} else if !settings.RequireH3 && result.HTTPS.SuccessRate >= settings.HTTPMinSuccessRate {
+				candidates = append(candidates, result.Candidate)
+			}
+		}
+	}
+	checkpoint, ok, err := a.store.Checkpoint()
+	if err == nil && ok && checkpoint.Settings.RequireH3 == settings.RequireH3 {
+		if settings.RequireH3 && checkpoint.Settings.EffectiveVerificationHost() == settings.EffectiveVerificationHost() {
+			add(checkpoint.HTTP3Results)
+		} else if !settings.RequireH3 {
+			add(checkpoint.HTTPSResults)
+		}
+	}
+	for _, summary := range a.store.History() {
+		if summary.State == "completed" && model.NormalizeMode(summary.Mode) == settings.ProbeMode() && (!settings.RequireH3 || summary.WorkerHost == settings.EffectiveVerificationHost()) {
+			add(summary.Results)
+			if len(candidates) > 0 {
+				break
+			}
+		}
+	}
+	return runengine.TestDownload(a.appContext(), settings, candidates, nil, downloadCheckProbe(settings)), nil
 }
 
 func (a *App) startRun(request runengine.StartRequest, paths []string) (string, error) {
@@ -277,6 +331,7 @@ func (a *App) startRun(request runengine.StartRequest, paths []string) (string, 
 		localFiles = &parsed
 	}
 	a.engine.Dependencies.Fetcher = newTrackingFetcher(a.store, settings)
+	a.engine.Dependencies.DownloadCheck = downloadCheckProbe(settings)
 	a.engine.Dependencies.TCP = probe.TCPProber{Timeout: settings.ConnectTimeout(), MinSuccessRate: settings.ConnectionMinSuccessRate}
 	a.engine.Dependencies.HTTPS = probe.HTTPSProber{ConnectTimeout: settings.ConnectTimeout(), RequestTimeout: settings.RequestTimeout(), MinSuccessRate: settings.HTTPMinSuccessRate}
 	bandwidthThreshold := probe.BandwidthThreshold{MinMbps: settings.MinBandwidthMbps, LineMbps: settings.LineBandwidthMbps}
@@ -288,6 +343,9 @@ func (a *App) startRun(request runengine.StartRequest, paths []string) (string, 
 	if stage == "" {
 		stage = runengine.StageSource
 	}
+	if request.ContinueBandwidth {
+		stage = runengine.StageBandwidth
+	}
 	if !runengine.ValidStartStage(stage) {
 		return "", fmt.Errorf("未知测速起点")
 	}
@@ -297,6 +355,7 @@ func (a *App) startRun(request runengine.StartRequest, paths []string) (string, 
 	network := detectNetwork()
 	networkSnapshot := runengine.NetworkSnapshot{Interface: network.Interface, IPv4: network.IPv4}
 	var base *runengine.Checkpoint
+	pins := a.pinnedCandidates()
 	retained := []model.ProbeResult{}
 	if stage == runengine.StageSource && settings.RetainPreviousResults {
 		for _, summary := range a.store.History() {
@@ -317,12 +376,16 @@ func (a *App) startRun(request runengine.StartRequest, paths []string) (string, 
 		}
 		currentRunID := a.latestRunID()
 		info := runengine.BuildResumeInfo(checkpoint, currentRunID, settings, a.store.Sources(), networkSnapshot, time.Now())
-		info = runengine.ApplyPinnedResumeInfo(info, checkpoint, a.pinnedCandidates())
+		info = runengine.ApplyPinnedResumeInfo(info, checkpoint, pins)
 		var selected *runengine.ResumeOption
-		for index := range info.Options {
-			if info.Options[index].Stage == stage {
-				selected = &info.Options[index]
-				break
+		if request.ContinueBandwidth {
+			selected = runengine.DownloadResumeInfo(checkpoint, settings, networkSnapshot, a.store.Sources(), pins, time.Now())
+		} else {
+			for index := range info.Options {
+				if info.Options[index].Stage == stage {
+					selected = &info.Options[index]
+					break
+				}
 			}
 		}
 		if selected == nil || !selected.Available {
@@ -333,7 +396,7 @@ func (a *App) startRun(request runengine.StartRequest, paths []string) (string, 
 		}
 		base = &checkpoint
 	}
-	input := runengine.RunInput{LocalFiles: localFiles, Sources: a.store.Sources(), Retained: retained, Pinned: a.pinnedCandidates(), Plan: runengine.RunPlan{StartStage: stage, Base: base, Network: networkSnapshot, Save: a.store.SaveCheckpoint}}
+	input := runengine.RunInput{LocalFiles: localFiles, Sources: a.store.Sources(), Retained: retained, Pinned: pins, Plan: runengine.RunPlan{StartStage: stage, Base: base, Network: networkSnapshot, Save: a.store.SaveCheckpoint, Quick: request.Quick && stage == runengine.StageSource, ContinueBandwidth: request.ContinueBandwidth}}
 	id, err := a.manager.Start(a.appContext(), a.engine, settings, input, func(progress model.RunProgress) {
 		if a.desktop != nil {
 			a.desktop.Event.Emit("run:progress", progress)
@@ -370,10 +433,18 @@ func (a *App) resumeInfo(network NetworkInfo) runengine.ResumeInfo {
 	}
 	snapshot := runengine.NetworkSnapshot{Interface: network.Interface, IPv4: network.IPv4}
 	info := runengine.BuildResumeInfo(checkpoint, a.latestRunID(), a.store.Settings(), a.store.Sources(), snapshot, time.Now())
-	return runengine.ApplyPinnedResumeInfo(info, checkpoint, a.pinnedCandidates())
+	pins := a.pinnedCandidates()
+	info = runengine.ApplyPinnedResumeInfo(info, checkpoint, pins)
+	info.ContinueBandwidth = runengine.DownloadResumeInfo(checkpoint, a.store.Settings(), snapshot, a.store.Sources(), pins, time.Now())
+	if info.ContinueBandwidth != nil {
+		info.BaseRunID = checkpoint.RunID
+	}
+	return info
 }
 
 func (a *App) CancelRun() bool { return a.manager.Cancel() }
+
+func (a *App) SaveBandwidthAndStop() bool { return a.manager.SaveAndStop() }
 
 func (a *App) CancelRunWithResults(keepResults bool) bool {
 	return a.manager.CancelWithResults(keepResults)

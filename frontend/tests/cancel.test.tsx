@@ -54,12 +54,11 @@ describe("cancelling with complete results",()=>{
     fireEvent.click(within(dialog).getByRole("button",{name:"保留已通过节点并结束"}));
     await waitFor(()=>expect(api.CancelRunWithResults).toHaveBeenCalledExactlyOnceWith(true));
     await finish(true);
-    expect(screen.getByRole("heading",{name:"已取消，已保留部分结果"})).toBeInTheDocument();
     expect(screen.getByText("已取消，已保留部分结果 · 1 个节点")).toBeInTheDocument();
     expect(screen.getByRole("option",{name:/已取消，已保留部分结果/})).toBeInTheDocument();
     expect(api.PublishRun).not.toHaveBeenCalled();
     const clipboard=vi.spyOn(navigator.clipboard,"writeText");
-    fireEvent.click(screen.getByRole("button",{name:"复制结果"}));
+    fireEvent.click(screen.getByRole("button",{name:"复制全部 1 个"}));
     await waitFor(()=>expect(clipboard).toHaveBeenCalledWith(expect.stringContaining("192.0.2.1:443")));
     expect(screen.getByRole("button",{name:"导出 CSV"})).toBeEnabled();
     fireEvent.click(screen.getByRole("button",{name:"发布结果"}));

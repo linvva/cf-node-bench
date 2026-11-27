@@ -92,13 +92,15 @@ describe("shared publication and H3 requirement",()=>{
   });
   it.each(["running","completed"] as const)("counts skipped attempts as resolved work without reporting them as executed when %s",state=>{
     const completed=state==="running"?2:3,skipped=completed*2;
-    const current={...getAppState(),settings:{...defaultSettings,requireH3:true},running:state==="running",progress:{runId:"early-stop",mode:"h3" as const,state,startedAt:new Date().toISOString(),stages:[{name:"quic",input:3,passed:0,failed:completed,attemptsCompleted:completed,attemptsSkipped:skipped,attemptsTotal:9,durationMs:2000,state}],failures:{quic_timeout:completed}}};
+    const progress={runId:"early-stop",mode:"h3" as const,state,startedAt:new Date().toISOString(),stages:[{name:"quic",input:3,passed:0,failed:completed,attemptsCompleted:completed,attemptsSkipped:skipped,attemptsTotal:9,durationMs:2000,state}],failures:{quic_timeout:completed}};
+    const summary:RunSummary={...progress,finishedAt:progress.startedAt,results:[],publications:[],scoreWeights:defaultSettings.scoreWeights,reusedStages:[]};
+    const current={...getAppState(),settings:{...defaultSettings,requireH3:true},current:state==="completed"?summary:undefined,running:state==="running",progress};
     vi.spyOn(store,"useAppStore").mockImplementation(selector=>selector(current));
     render(<RunWorkspace/>);
-    expect(Number(screen.getByRole("progressbar",{name:"QUIC进度"}).getAttribute("aria-valuenow"))).toBeCloseTo((completed+skipped)/9*100);
-    expect(screen.getByText(`提前跳过 ${skipped} 次`)).toBeInTheDocument();
-    expect(screen.getByLabelText("当前测速进度")).toHaveTextContent(`${completed} ${state==="running"?"/ 3 节点":"失败"}`);
+    expect(screen.getByText("提前跳过 "+skipped+" 次")).toBeInTheDocument();
     if(state==="running"){
+      expect(Number(screen.getByRole("progressbar",{name:"QUIC进度"}).getAttribute("aria-valuenow"))).toBeCloseTo((completed+skipped)/9*100);
+      expect(screen.getByLabelText("当前测速进度")).toHaveTextContent(completed+" / 3 节点");
       expect(screen.getByText("2 / 9 次探测 · 提前跳过 4 次")).toBeInTheDocument();
       expect(screen.getByText("1 次/秒")).toBeInTheDocument();
       expect(screen.getByText("1 秒")).toBeInTheDocument();
@@ -128,7 +130,7 @@ describe("shared publication and H3 requirement",()=>{
     view.rerender(<RunWorkspace/>);
     expect(screen.getByLabelText("带宽新节点队列")).toHaveTextContent("累计安排：50待测：17在测：3新节点通过：18 / 30");
     expect(screen.getByRole("progressbar",{name:"带宽进度"})).toHaveAttribute("aria-valuenow","60");
-    expect(screen.getByText("动态补测")).toBeInTheDocument();
+    expect(screen.queryByText("本阶段预计剩余")).not.toBeInTheDocument();
     http.selected=350;
     download.queue={pool:350,target:30,planned:250,active:3,pending:217,passed:18};
     view.rerender(<RunWorkspace/>);
@@ -145,11 +147,12 @@ describe("shared publication and H3 requirement",()=>{
     http.selected=2;
     current.running=false;
     current.progress.state="completed";
+    Object.assign(current,{current:{...current.progress,finishedAt:current.progress.startedAt,results:[],publications:[],scoreWeights:defaultSettings.scoreWeights,reusedStages:[]}});
     Object.assign(download,{input:2,passed:2,failed:0,state:"completed",queue:{pool:2,target:30,planned:2,active:0,pending:0,passed:2}});
     view.rerender(<RunWorkspace/>);
     expect(screen.getByLabelText("带宽新节点队列")).toHaveTextContent("新节点通过：2 / 30");
     expect(screen.getByText("本轮候选已测完，未达到目标")).toBeInTheDocument();
-    expect(Number(screen.getByRole("progressbar",{name:"带宽进度"}).getAttribute("aria-valuenow"))).toBeCloseTo(2/30*100);
+    expect(screen.queryByRole("progressbar",{name:"带宽进度"})).not.toBeInTheDocument();
     expect(screen.queryByText("已达目标")).not.toBeInTheDocument();
   });
   it("shows the migration notice without requiring a private Worker domain",async()=>{

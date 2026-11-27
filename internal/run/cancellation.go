@@ -10,6 +10,8 @@ import (
 )
 
 var errKeepCancelledResults = errors.New("保留取消时已完成的测速结果")
+var errDiscardRun = errors.New("丢弃本轮结果")
+var errSaveDownload = errors.New("保存带宽续测进度")
 
 // recordCompletedResult is called only after the whole logical node has finished
 // bandwidth measurement, or when reusing a complete bandwidth checkpoint.

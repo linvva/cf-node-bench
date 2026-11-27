@@ -69,6 +69,7 @@ const (
 	FailureDNS                  FailureReason = "dns"
 	FailureTCP                  FailureReason = "tcp"
 	FailureTLS                  FailureReason = "tls"
+	FailureTLSHandshakeTimeout  FailureReason = "tls_timeout"
 	FailureTimeout              FailureReason = "timeout"
 	FailureHTTPStatus           FailureReason = "http_status"
 	FailureCancelled            FailureReason = "cancelled"
@@ -146,18 +147,19 @@ type EndpointResult struct {
 }
 
 type StageProgress struct {
-	Selected          *int        `json:"selected,omitempty"`
-	Queue             *StageQueue `json:"queue,omitempty"`
-	Name              string      `json:"name"`
-	Input             int         `json:"input"`
-	Passed            int         `json:"passed"`
-	Failed            int         `json:"failed"`
-	AttemptsCompleted int         `json:"attemptsCompleted,omitempty"`
-	AttemptsSkipped   int         `json:"attemptsSkipped,omitempty"`
-	AttemptsTotal     int         `json:"attemptsTotal,omitempty"`
-	DurationMS        int64       `json:"durationMs"`
-	State             string      `json:"state"`
-	MeasuredAt        time.Time   `json:"measuredAt,omitempty"`
+	Failures          map[FailureReason]int `json:"failures,omitempty"`
+	Selected          *int                  `json:"selected,omitempty"`
+	Queue             *StageQueue           `json:"queue,omitempty"`
+	Name              string                `json:"name"`
+	Input             int                   `json:"input"`
+	Passed            int                   `json:"passed"`
+	Failed            int                   `json:"failed"`
+	AttemptsCompleted int                   `json:"attemptsCompleted,omitempty"`
+	AttemptsSkipped   int                   `json:"attemptsSkipped,omitempty"`
+	AttemptsTotal     int                   `json:"attemptsTotal,omitempty"`
+	DurationMS        int64                 `json:"durationMs"`
+	State             string                `json:"state"`
+	MeasuredAt        time.Time             `json:"measuredAt,omitempty"`
 }
 
 // StageQueue describes fresh logical candidates; retained nodes are measured separately.
@@ -171,6 +173,8 @@ type StageQueue struct {
 }
 
 type RunProgress struct {
+	Quick              bool                  `json:"quick,omitempty"`
+	DownloadCheck      *DownloadCheck        `json:"downloadCheck,omitempty"`
 	AvailableResults   int                   `json:"availableResults,omitempty"`
 	LocalFiles         bool                  `json:"localFiles,omitempty"`
 	Mode               Mode                  `json:"mode,omitempty"`
@@ -187,6 +191,10 @@ type RunProgress struct {
 }
 
 type RunSummary struct {
+	BandwidthSaved     bool                  `json:"bandwidthSaved,omitempty"`
+	Quick              bool                  `json:"quick,omitempty"`
+	Stages             []StageProgress       `json:"stages,omitempty"`
+	DownloadCheck      *DownloadCheck        `json:"downloadCheck,omitempty"`
 	PartialResults     bool                  `json:"partialResults,omitempty"`
 	LocalFiles         bool                  `json:"localFiles,omitempty"`
 	Mode               Mode                  `json:"mode,omitempty"`
@@ -206,6 +214,13 @@ type RunSummary struct {
 	StartStage         string                `json:"startStage,omitempty"`
 	ReusedStages       []string              `json:"reusedStages,omitempty"`
 	CheckpointWarning  string                `json:"checkpointWarning,omitempty"`
+}
+
+type DownloadCheck struct {
+	Host     string                `json:"host"`
+	Sampled  int                   `json:"sampled"`
+	Passed   int                   `json:"passed"`
+	Failures map[FailureReason]int `json:"failures"`
 }
 
 type PublicationResult struct {

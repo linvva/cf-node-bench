@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/linvva/cf-node-bench/internal/model"
+	"github.com/linvva/cf-node-bench/internal/region"
 )
 
 func FormatResult(result model.ProbeResult, fields OutputFields) string {
@@ -17,7 +18,7 @@ func FormatResult(result model.ProbeResult, fields OutputFields) string {
 	if model.NormalizeMode(result.Mode) == model.ModeH3 {
 		labels := []string{}
 		if fields.Country && result.Candidate.Country != "" {
-			labels = append(labels, result.Candidate.Country)
+			labels = append(labels, region.Label(result.Candidate.Country))
 		}
 		labels = append(labels, "H3")
 		if fields.TCPP95 {
@@ -32,7 +33,7 @@ func FormatResult(result model.ProbeResult, fields OutputFields) string {
 		return base + "#" + strings.Join(labels, "|")
 	}
 	if fields.Country && result.Candidate.Country != "" {
-		base += "#" + result.Candidate.Country
+		base += "#" + region.Label(result.Candidate.Country)
 	}
 	parts := []string{base}
 	if fields.TCPP95 {
@@ -51,7 +52,7 @@ func formatCompactResult(result model.ProbeResult, fields OutputFields) string {
 	base := result.Candidate.Key()
 	labels := []string{}
 	if fields.Country && result.Candidate.Country != "" {
-		labels = append(labels, result.Candidate.Country)
+		labels = append(labels, region.Label(result.Candidate.Country))
 	}
 	connection, http, connectionLabel := result.TCP.P95MS, result.HTTPS.AverageMS, "TCP"
 	if model.NormalizeMode(result.Mode) == model.ModeH3 {

@@ -2,14 +2,12 @@ import { Button, Modal, Tabs } from "@heroui/react";
 import { Scale, X } from "lucide-react";
 import projectLicense from "../../../../LICENSE?raw";
 import thirdPartyNotices from "../../../public/THIRD_PARTY_NOTICES.md?raw";
-import apacheLicense from "../../../public/licenses/Apache-2.0.txt?raw";
-import twemojiLicense from "../../../public/licenses/twemoji-colr-LICENSE.md?raw";
+import unicodeLicense from "../../../public/licenses/Unicode-3.0.txt?raw";
 
 const documents=[
   {id:"project",title:"项目许可证",text:projectLicense},
   {id:"third-party",title:"第三方声明",text:thirdPartyNotices},
-  {id:"apache",title:"Apache 2.0",text:apacheLicense},
-  {id:"twemoji",title:"Twemoji 许可",text:twemojiLicense},
+  {id:"unicode",title:"Unicode 许可",text:unicodeLicense},
 ];
 
 export function LicenseDialog(){

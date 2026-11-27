@@ -22,6 +22,9 @@ func classify(ctx context.Context, err error) model.FailureReason {
 		return model.FailureDNS
 	}
 	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "tls handshake timeout") {
+		return model.FailureTLSHandshakeTimeout
+	}
 	if strings.Contains(text, "tls") || strings.Contains(text, "certificate") || strings.Contains(text, "x509") {
 		return model.FailureTLS
 	}

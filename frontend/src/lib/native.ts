@@ -1,6 +1,6 @@
 import { Browser, Events } from "@wailsio/runtime";
 import * as App from "../../bindings/github.com/linvva/cf-node-bench/app";
-import type { Bootstrap, PublishSaveRequest, PublishSettingsView, Settings, UpdateState } from "../types";
+import type { Bootstrap, DownloadCheck, PublishSaveRequest, PublishSettingsView, Settings, UpdateState } from "../types";
 
 // Keep the existing UI models at the JSON boundary: Go bindings include zero enum
 // values and legacy score fields that the UI normalizes or leaves out on save.
@@ -10,6 +10,7 @@ export const app={
   UpdateStatus:()=>App.UpdateStatus() as Promise<UpdateState>,
   CheckForUpdate:()=>App.CheckForUpdate() as Promise<UpdateState>,
   DownloadUpdate:()=>App.DownloadUpdate() as Promise<UpdateState>,
+  TestDownloadAddress:(value:Settings)=>App.TestDownloadAddress(value as Parameters<typeof App.TestDownloadAddress>[0]) as unknown as Promise<DownloadCheck>,
   SaveSettings:(value:Settings)=>App.SaveSettings(value as Parameters<typeof App.SaveSettings>[0]),
   SavePublishSettings:(value:PublishSaveRequest)=>App.SavePublishSettings(value as Parameters<typeof App.SavePublishSettings>[0]) as Promise<PublishSettingsView>,
   ClearPublishCredential:(target:string)=>App.ClearPublishCredential(target) as Promise<PublishSettingsView>,

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Autocomplete, Description, Heading, Label, ListBox, SearchField, Tag, TagGroup } from "@heroui/react";
-import { countryFlag, countryOptions } from "./countries";
+import { countryFlag } from "../../lib/regions";
+import { countryOptions } from "./countries";
 
 interface CountryPickerProps {
   label: string;

@@ -2,8 +2,8 @@ import { useSyncExternalStore } from "react";
 import { bridge } from "./lib/bridge";
 import type { Bootstrap, HTTPSource, PublicationResult, PublicationUpdate, PublishCredentialTarget, PublishSaveRequest, PublishSettingsView, PublishTarget, RunProgress, RunStartRequest, RunSummary, Settings, UpdateState } from "./types";
 
-interface AppState extends Bootstrap { ready:boolean; running:boolean; cancelling:boolean; preparingLocal:boolean; savingMode:boolean; progress?:RunProgress; current?:RunSummary; error?:string; startupError?:string; update:UpdateState; restartingUpdate:boolean; publishing:boolean }
-const initial:AppState={version:"dev",update:{currentVersion:"dev",status:"idle"},restartingUpdate:false,publishing:false,ready:false,running:false,cancelling:false,preparingLocal:false,savingMode:false,settings:{} as Settings,publishSettings:{} as PublishSettingsView,sources:[],history:[],pinnedNodes:[],network:{interface:"",ipv4:"",status:"unavailable"},resume:{options:[]}};
+interface AppState extends Bootstrap { ready:boolean; quickSelection:boolean; running:boolean; cancelling:boolean; preparingLocal:boolean; savingMode:boolean; progress?:RunProgress; current?:RunSummary; error?:string; startupError?:string; update:UpdateState; restartingUpdate:boolean; publishing:boolean }
+const initial:AppState={version:"dev",update:{currentVersion:"dev",status:"idle"},restartingUpdate:false,publishing:false,ready:false,quickSelection:false,running:false,cancelling:false,preparingLocal:false,savingMode:false,settings:{} as Settings,publishSettings:{} as PublishSettingsView,sources:[],history:[],pinnedNodes:[],network:{interface:"",ipv4:"",status:"unavailable"},resume:{options:[]}};
 let state=initial;
 let cancelRequestPending=false;
 let updateInitialized=false;
@@ -27,11 +27,14 @@ export const actions={
     setState({restartingUpdate:true,update:{...state.update,error:undefined}});
     try{await bridge.restartForUpdate();}catch(error){setState({restartingUpdate:false,update:{...state.update,error:String(error)}});}
   },
+  setQuickSelection(quickSelection:boolean){setState({quickSelection});},
   async start(request:RunStartRequest={startStage:"source",allowStaleCheckpoint:false}){
     if(state.running||state.cancelling||state.preparingLocal||state.savingMode||state.restartingUpdate)throw new Error("已有测速任务正在运行或准备中");
-    const input=request.startStage==="source"?state.sources.filter(source=>source.enabled).length:state.resume.options.find(option=>option.stage===request.startStage)?.input??0;
+    if(request.startStage==="source"&&state.quickSelection)request={...request,quick:true};
+    const option=request.continueBandwidth?state.resume.continueBandwidth:state.resume.options.find(option=>option.stage===request.startStage);
+    const input=request.startStage==="source"?state.sources.filter(source=>source.enabled).length:option?.input??0;
     const localFiles=request.startStage!=="source"&&Boolean(state.current?.localFiles);
-    return startTask(()=>bridge.startRun(request),request.startStage,input,localFiles);
+    return startTask(()=>bridge.startRun(request),request.startStage,input,localFiles,Boolean(request.quick));
   },
   async startLocal(paths?:string[]){
     if(state.running||state.cancelling||state.preparingLocal||state.savingMode||state.restartingUpdate)throw new Error("已有测速任务正在运行或准备中");
@@ -39,13 +42,13 @@ export const actions={
     try {
       const selected=paths??await bridge.selectLocalFiles();
       if(!selected?.length)return;
-      return await startTask(()=>bridge.startLocalFiles(selected),"source",1,true);
+      return await startTask(()=>bridge.startLocalFiles(selected,state.quickSelection),"source",selected.length,true,state.quickSelection);
     } finally {setState({preparingLocal:false});}
   },
-  async cancel(keepResults=false,runId=state.progress?.runId||state.currentRunId){
+  async cancel(keepResults=false,runId=state.progress?.runId||state.currentRunId,saveBandwidth=false){
     if(!state.running||state.cancelling||!runId||runId!==(state.progress?.runId||state.currentRunId))return false;
     cancelRequestPending=true;setState({cancelling:true});
-    try{const accepted=await bridge.cancelRun(keepResults);if(!accepted||!state.running)setState({cancelling:false});return accepted;}catch(error){setState({cancelling:false});throw error;}finally{cancelRequestPending=false;}
+    try{const accepted=await bridge.cancelRun(keepResults,saveBandwidth);if(!accepted||!state.running)setState({cancelling:false});return accepted;}catch(error){setState({cancelling:false});throw error;}finally{cancelRequestPending=false;}
   },
   async saveSettings(settings:Settings){ await bridge.saveSettings(settings); const data=await bridge.bootstrap(); setState({settings:data.settings,resume:data.resume}); },
   async saveSources(sources:HTTPSource[]){ await bridge.saveSources(sources); setState({sources}); },
@@ -63,8 +66,8 @@ export const actions={
   async publishRun(runId:string,target:"all"|PublishTarget){ await bridge.publishRun(runId,target); },
 };
 
-async function startTask(start:()=>Promise<string>,stage:RunStartRequest["startStage"],input:number,localFiles:boolean){
-  setState({running:true,cancelling:false,error:undefined,progress:{runId:"",mode:state.settings.requireH3?"h3":"tcp_https",localFiles,state:"running",startedAt:new Date().toISOString(),stages:[{name:stage,input,passed:0,failed:0,durationMs:0,state:"running"}],failures:{}}});
+async function startTask(start:()=>Promise<string>,stage:RunStartRequest["startStage"],input:number,localFiles:boolean,quick:boolean){
+  setState({running:true,cancelling:false,error:undefined,progress:{runId:"",quick,mode:state.settings.requireH3?"h3":"tcp_https",localFiles,state:"running",startedAt:new Date().toISOString(),stages:[{name:stage,input,passed:0,failed:0,durationMs:0,state:"running"}],failures:{}}});
   try {
     const id=await start();
     if(state.running)setState({currentRunId:id,progress:state.progress?{...state.progress,runId:state.progress.runId||id}:undefined});

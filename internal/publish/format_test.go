@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/linvva/cf-node-bench/internal/model"
+	"github.com/linvva/cf-node-bench/internal/source"
 )
 
 func sampleResult(ip string, port int, country string) model.ProbeResult {
@@ -21,10 +22,10 @@ func TestFormatResultFields(t *testing.T) {
 		fields OutputFields
 		want   string
 	}{
-		{"detailed", OutputFields{Format: OutputFormatDetailed, Country: true, TCPP95: true, HTTPLatency: true, Bandwidth: true}, "104.18.1.20:8443#CN|TCP22ms|HTTP44.3ms|186Mbps"},
-		{"compact default", DefaultSettings().Output, "104.18.1.20:8443#CN|44ms|186M"},
-		{"compact all fields", OutputFields{Country: true, TCPP95: true, HTTPLatency: true, Bandwidth: true}, "104.18.1.20:8443#CN|TCP22ms|44ms|186M"},
-		{"minimal", OutputFields{Country: true}, "104.18.1.20:8443#CN"},
+		{"detailed", OutputFields{Format: OutputFormatDetailed, Country: true, TCPP95: true, HTTPLatency: true, Bandwidth: true}, "104.18.1.20:8443#🇨🇳中国|TCP22ms|HTTP44.3ms|186Mbps"},
+		{"compact default", DefaultSettings().Output, "104.18.1.20:8443#🇨🇳中国|44ms|186M"},
+		{"compact all fields", OutputFields{Country: true, TCPP95: true, HTTPLatency: true, Bandwidth: true}, "104.18.1.20:8443#🇨🇳中国|TCP22ms|44ms|186M"},
+		{"minimal", OutputFields{Country: true}, "104.18.1.20:8443#🇨🇳中国"},
 		{"without country", OutputFields{HTTPLatency: true, Bandwidth: true}, "104.18.1.20:8443#44ms|186M"},
 		{"no fields", OutputFields{}, "104.18.1.20:8443"},
 		{"detailed without country", OutputFields{Format: OutputFormatDetailed, HTTPLatency: true}, "104.18.1.20:8443|HTTP44.3ms"},
@@ -53,8 +54,37 @@ func TestCloudflareContentsAAndTXT(t *testing.T) {
 	}
 	settings.Cloudflare.RecordType = "TXT"
 	contents, eligible, skipped = CloudflareContents(results, settings)
-	if len(contents) != 3 || eligible != 4 || skipped != 0 || contents[1] != "1.1.1.2:8443#CN|44ms|186M" {
+	if len(contents) != 3 || eligible != 4 || skipped != 0 || contents[1] != "1.1.1.2:8443#🇨🇳中国|44ms|186M" {
 		t.Fatalf("TXT contents=%v eligible=%d skipped=%d", contents, eligible, skipped)
+	}
+}
+
+func TestNodeOutputRoundTripsAsText(t *testing.T) {
+	for _, mode := range []model.Mode{model.ModeTCPHTTPS, model.ModeH3} {
+		result := sampleResult("192.0.2.1", 8443, "JP")
+		result.Mode = mode
+		parse := source.Parse
+		if mode == model.ModeH3 {
+			result.Candidate.AddressType, result.Candidate.Host = model.AddressDomain, "edge.example.com"
+			parse = source.ParseH3
+		}
+		for _, format := range []string{OutputFormatCompact, OutputFormatDetailed} {
+			for _, country := range []string{"JP", "AE", "ZZ", ""} {
+				result.Candidate.Country = country
+				for _, showCountry := range []bool{true, false} {
+					line := FormatResult(result, OutputFields{Format: format, Country: showCountry, TCPP95: true, HTTPLatency: true, Bandwidth: true})
+					actual := parse([]byte(line), "published")
+					wantCountry := country
+					if !showCountry {
+						wantCountry = ""
+					}
+					if len(actual.Failures) != 0 || len(actual.Candidates) != 1 ||
+						actual.Candidates[0].Key() != result.Candidate.Key() || actual.Candidates[0].Country != wantCountry {
+						t.Errorf("reimport %q, want %q: %+v", line, wantCountry, actual)
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -66,23 +96,23 @@ func TestH3FormatPreservesDomainAndUsesOnlyH3Metrics(t *testing.T) {
 	result.QUIC = model.ProbeStats{P95MS: 17.5}
 	result.HTTP3 = model.ProbeStats{AverageMS: 31.2}
 	fields := OutputFields{Format: OutputFormatDetailed, Country: true, TCPP95: true, HTTPLatency: true, Bandwidth: true}
-	if got := FormatResult(result, fields); got != "nodes.example.com:8443#HK|H3|QUIC17.5ms|HTTP331.2ms|186Mbps" {
+	if got := FormatResult(result, fields); got != "nodes.example.com:8443#🇭🇰香港|H3|QUIC17.5ms|HTTP331.2ms|186Mbps" {
 		t.Fatalf("H3 format = %q", got)
 	}
 	if got := FormatResult(result, OutputFields{}); got != "nodes.example.com:8443#H3" {
 		t.Fatalf("H3 base format = %q", got)
 	}
 	fields.Format = OutputFormatCompact
-	if got := FormatResult(result, fields); got != "nodes.example.com:8443#HK|H3|QUIC18ms|31ms|186M" {
+	if got := FormatResult(result, fields); got != "nodes.example.com:8443#🇭🇰香港|H3|QUIC18ms|31ms|186M" {
 		t.Fatalf("compact H3 format = %q", got)
 	}
-	if got := FormatResult(result, OutputFields{Country: true}); got != "nodes.example.com:8443#HK|H3" {
+	if got := FormatResult(result, OutputFields{Country: true}); got != "nodes.example.com:8443#🇭🇰香港|H3" {
 		t.Fatalf("minimal H3 format = %q", got)
 	}
 	settings := DefaultSettings()
 	settings.Cloudflare.RecordType = "TXT"
 	contents, eligible, skipped := CloudflareContents([]model.ProbeResult{result}, settings)
-	if len(contents) != 1 || contents[0] != "nodes.example.com:8443#HK|H3|31ms|186M" || eligible != 1 || skipped != 0 {
+	if len(contents) != 1 || contents[0] != "nodes.example.com:8443#🇭🇰香港|H3|31ms|186M" || eligible != 1 || skipped != 0 {
 		t.Fatalf("H3 TXT = %v eligible=%d skipped=%d", contents, eligible, skipped)
 	}
 	result.Candidate.Port = 443

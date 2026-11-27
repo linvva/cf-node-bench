@@ -80,7 +80,7 @@ func TestCloudflareTXTAndEmptyA(t *testing.T) {
 	settings := DefaultSettings()
 	settings.Cloudflare = CloudflareSettings{Enabled: true, APIToken: "secret", ZoneID: "zone", RecordName: "cf.example.com", RecordType: "TXT", TTL: 60, Proxied: true}
 	result := testService(server).PublishCloudflare(t.Context(), model.RunSummary{Results: []model.ProbeResult{sampleResult("1.1.1.2", 8443, "CN")}}, settings)
-	if result.State != "succeeded" || post.Type != "TXT" || post.Proxied != nil || !strings.Contains(post.Content, "1.1.1.2:8443#CN") {
+	if result.State != "succeeded" || post.Type != "TXT" || post.Proxied != nil || !strings.Contains(post.Content, "1.1.1.2:8443#🇨🇳中国") {
 		t.Fatalf("result=%+v post=%+v", result, post)
 	}
 	requests = 0
@@ -217,7 +217,7 @@ func TestTelegramSummaryDetailsAndRetry(t *testing.T) {
 	texts, attempts = nil, 1
 	settings.Telegram.ContentMode = "details"
 	result = testService(server).PublishTelegram(t.Context(), testSummary(), settings, outcomes)
-	if result.State != "succeeded" || len(texts) != 2 || !strings.Contains(texts[1], "1.1.1.2:8443#CN") {
+	if result.State != "succeeded" || len(texts) != 2 || !strings.Contains(texts[1], "1.1.1.2:8443#🇨🇳中国") {
 		t.Fatalf("details result=%+v texts=%v", result, texts)
 	}
 }

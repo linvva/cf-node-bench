@@ -30,8 +30,8 @@ for(const mode of ["tcp_https","h3"] as const){
     await expect(dialog).toHaveCount(0);
     await expect(page.getByRole("button",{name:"开始测速",exact:true})).toBeVisible();
     if(keep){
-      await expect(page.getByRole("heading",{name:"已取消，已保留部分结果",exact:true})).toBeVisible();
-      await expect(page.getByRole("button",{name:"复制结果",exact:true})).toBeEnabled();
+      await expect(page.locator(".result-run-context span").filter({hasText:"已取消，已保留部分结果"})).toBeVisible();
+      await expect(page.getByRole("button",{name:/^复制全部 \d+ 个$/})).toBeEnabled();
       await expect(page.getByRole("button",{name:"导出 CSV",exact:true})).toBeEnabled();
       await expect(page.getByRole("button",{name:"发布结果",exact:true})).toBeVisible();
       await expect(page.getByLabel("发布状态")).toContainText("尚无发布记录");
@@ -40,9 +40,9 @@ for(const mode of ["tcp_https","h3"] as const){
       await page.getByRole("button",{name:"导出 CSV",exact:true}).click();
       expect((await download).suggestedFilename()).toMatch(/\.csv$/);
     }else{
-      await expect(page.getByRole("heading",{name:"测速已取消",exact:true})).toBeVisible();
+      await expect(page.locator(".result-run-context span").filter({hasText:/^测速已取消$/})).toBeVisible();
       await expect(page.locator(".status-pill")).toHaveCount(0);
-      await expect(page.getByRole("button",{name:"复制结果",exact:true})).toBeDisabled();
+      await expect(page.getByRole("button",{name:/^复制全部 \d+ 个$/})).toBeDisabled();
       await expect(page.getByRole("button",{name:"发布结果",exact:true})).toHaveCount(0);
     }
     await page.screenshot({path:testInfo.outputPath("cancelled-results.png")});
@@ -62,7 +62,7 @@ for(const mode of ["tcp_https","h3"] as const){
     await expect(page.getByRole("dialog")).toBeVisible();
     await page.clock.runFor(1500);
     await expect(page.getByRole("dialog")).toHaveCount(0);
-    await expect(page.getByRole("heading",{name:"最近测速已完成",exact:true})).toBeVisible();
+    await expect(page.locator(".result-run-context span").filter({hasText:/完整筛选 · \d+ 个达标/})).toBeVisible();
     await page.getByRole("button",{name:"开始测速",exact:true}).click();
     await expect(page.getByRole("button",{name:"取消测速",exact:true})).toBeEnabled();
     await expect(page.getByRole("dialog")).toHaveCount(0);

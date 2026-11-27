@@ -55,16 +55,23 @@ func (m *Manager) Cancel() bool {
 }
 
 func (m *Manager) CancelWithResults(keep bool) bool {
+	if keep {
+		return m.cancelWithCause(errKeepCancelledResults)
+	}
+	return m.cancelWithCause(errDiscardRun)
+}
+
+func (m *Manager) SaveAndStop() bool {
+	return m.cancelWithCause(errSaveDownload)
+}
+
+func (m *Manager) cancelWithCause(cause error) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.cancel == nil {
 		return false
 	}
-	if keep {
-		m.cancel(errKeepCancelledResults)
-	} else {
-		m.cancel(context.Canceled)
-	}
+	m.cancel(cause)
 	return true
 }
 func (m *Manager) Current() string { m.mu.Lock(); defer m.mu.Unlock(); return m.current }

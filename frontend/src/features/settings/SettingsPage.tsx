@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { Button, Heading, Input, Label, ListBox, Select, Slider, toast } from "@heroui/react";
-import { RotateCcw, Save } from "lucide-react";
+import { Radio, RotateCcw, Save } from "lucide-react";
 import { bandwidthTestURLPresets, h3BandwidthTestURLPresets } from "../../lib/bandwidthTestUrls";
 import { DEFAULT_SCORE_WEIGHTS, scoreWeightTotal } from "../../lib/scoring";
 import { actions, useAppStore } from "../../store";
-import type { ScoreWeights, Settings } from "../../types";
+import { bridge } from "../../lib/bridge";
+import { downloadCheckText } from "../../lib/failureLabels";
+import type { DownloadCheck, ScoreWeights, Settings } from "../../types";
 import { UpdateSection } from "./UpdateSection";
 import { LicenseDialog } from "./LicenseDialog";
 import { CountryPicker } from "./CountryPicker";
@@ -13,7 +15,7 @@ const constraints = {
   connectionConcurrency:[1,256,"连接并发数"],httpConcurrency:[1,64,"HTTP 并发数"],bandwidthConcurrency:[1,10,"带宽并发数"],
   connectionProbeCount:[1,10,"连接探测次数"],httpProbeCount:[1,10,"HTTP 探测次数"],httpCandidateCount:[1,5000,"HTTP 候选批量"],
   connectTimeoutMs:[100,30000,"连接超时"],requestTimeoutMs:[500,60000,"HTTPS 超时"],h3ConnectTimeoutMs:[100,30000,"QUIC 超时"],h3RequestTimeoutMs:[500,60000,"HTTP/3 超时"],
-  bandwidthTimeoutMs:[1000,120000,"带宽总超时"],sourceTimeoutMs:[500,60000,"数据源超时"],sourceRetries:[0,3,"数据源重试次数"],bandwidthCandidates:[1,500,"带宽目标通过数"],finalResultCount:[1,100,"最终结果数"],
+  bandwidthTimeoutMs:[1000,120000,"带宽总超时"],sourceTimeoutMs:[500,60000,"数据源超时"],sourceRetries:[0,3,"数据源重试次数"],bandwidthCandidates:[1,500,"新节点达标目标"],finalResultCount:[1,100,"最终结果数"],
 } satisfies Record<string,[number,number,string]>;
 type IntegerSetting=keyof typeof constraints;
 
@@ -40,22 +42,15 @@ export function SettingsPage() {
     <div className="settings-layout">
       <div className="settings-column">
 
-        <SettingsSection title="并发" description="并发越高不一定越快，可能受本机网络和系统句柄限制。">
-          <Field label="连接并发" value={form.connectionConcurrency} min={1} max={256} onChange={(value) => number("connectionConcurrency", value)} />
-          <Field label={`${httpLabel} 并发`} value={form.httpConcurrency} min={1} max={64} onChange={(value) => number("httpConcurrency", value)} />
-          <Field label="带宽并发" value={form.bandwidthConcurrency} min={1} max={10} onChange={(value) => number("bandwidthConcurrency", value)} />
-        </SettingsSection>
-        <SettingsSection title="候选与过滤" description="连接合格的节点全部完成 HTTP 检测，再按成功率、P95 延迟排序，分批进入带宽候选池。">
-          <Field label="HTTP 候选批量" value={form.httpCandidateCount} min={1} max={5000} onChange={(value) => number("httpCandidateCount", value)} />
-          <Field label="带宽目标通过数" value={form.bandwidthCandidates} min={1} max={500} onChange={(value) => number("bandwidthCandidates", value)} />
+        <SettingsSection title="候选与过滤" description="新节点达标目标指通过连接、HTTP 和带宽门槛的新节点数。上轮复测和固化节点单独计算。">
+          <Field label="新节点达标目标" value={form.bandwidthCandidates} min={1} max={500} onChange={(value) => number("bandwidthCandidates", value)} />
           <Field label="最终结果数" value={form.finalResultCount} min={1} max={100} onChange={(value) => number("finalResultCount", value)} />
-          <div className="field field-wide"><small>HTTP 候选批量决定首批及每次补入的数量，不限制总测试数。未达带宽目标时继续从剩余 HTTP 合格节点补入，直到达标或全部测完；达到目标后等待在测任务完成，可能略超目标。空白过滤列表表示不限，排除国家优先。</small></div>
+          <div className="field field-wide"><small>达到目标后会等待正在测量的节点完成。空白过滤列表表示不限，排除国家优先。</small></div>
           <div className="field field-wide"><label>允许端口</label><Input aria-label="允许端口" value={form.allowedPorts.join(", ")} onChange={(event) => setForm((current) => ({ ...current, allowedPorts: event.target.value.split(/[,\s]+/).filter(Boolean).map(Number) }))} /><small>逗号分隔；留空表示不限</small></div>
           <CountryPicker label="允许国家" value={form.allowedCountries} description="留空表示不限；支持按中文名称或代码搜索" onChange={(value) => setForm((current) => ({ ...current, allowedCountries: value }))} />
           <CountryPicker label="排除国家" value={form.blockedCountries} description={`仅匹配数据源提供的国家标签；命中后在 ${connectionLabel} 前排除并显示数量`} onChange={(value) => setForm((current) => ({ ...current, blockedCountries: value }))} />
         </SettingsSection>
-        <SettingsSection title="下载测速" description="普通测速使用下方地址；H3 下载地址在高级设置中配置。下载上限按每个实际 IP 计算。">
-          <BandwidthTestPresetField isH3={false} value={form.bandwidthTestUrl} onChange={(value) => setForm((current) => ({ ...current, bandwidthTestUrl: value }))} />
+        <SettingsSection title="下载测速" description="下载上限按每个实际 IP 计算。">
           <MiBField value={form.maxDownloadBytes} onChange={(value) => setForm((current) => ({ ...current, maxDownloadBytes: value }))} />
           <BandwidthField label="最低节点带宽" value={form.minBandwidthMbps}
             description="填 0 关闭门槛。预计无法达标时提前结束下载。"
@@ -63,10 +58,26 @@ export function SettingsPage() {
           <BandwidthField label="线路带宽上限" value={form.lineBandwidthMbps}
             description="留空或填 0 即可省略。请填整条线路可达到的下载峰值，填得过低可能误淘汰。"
             onChange={lineBandwidthMbps=>setForm(current=>({...current,lineBandwidthMbps}))}/>
-          <div className="field field-wide"><label>下载测速 URL</label><Input aria-label="下载测速 URL" value={form.bandwidthTestUrl} placeholder="https://example.com/file.bin" onChange={(event) => setForm((current) => ({ ...current, bandwidthTestUrl: event.target.value }))} /></div>
         </SettingsSection>
       </div>
       <div className="settings-column">
+        <SettingsSection title="下载测速地址" description="预检通过已有候选从下载地址读取 64 KiB。">
+          <DownloadAddressField form={form} isH3={false} onChange={bandwidthTestUrl=>setForm(current=>({...current,bandwidthTestUrl}))}/>
+          <DownloadAddressField form={form} isH3 onChange={h3BandwidthTestUrl=>setForm(current=>({...current,h3BandwidthTestUrl}))}/>
+        </SettingsSection>
+      </div>
+    </div>
+    <details className="panel settings-advanced"><summary>高级设置</summary>
+      <div className="settings-layout">
+        <div className="settings-column">
+        <SettingsSection title="并发" description="并发越高不一定越快，可能受本机网络和系统句柄限制。">
+          <Field label="连接并发" value={form.connectionConcurrency} min={1} max={256} onChange={(value) => number("connectionConcurrency", value)} />
+          <Field label={`${httpLabel} 并发`} value={form.httpConcurrency} min={1} max={64} onChange={(value) => number("httpConcurrency", value)} />
+          <Field label="带宽并发" value={form.bandwidthConcurrency} min={1} max={10} onChange={(value) => number("bandwidthConcurrency", value)} />
+        </SettingsSection>
+        <SettingsSection title="候选批量" description="完整筛选按批补充下载候选。快速筛选按批做 HTTP 测试，达标后停止取下一批。">
+          <Field label="HTTP 候选批量" value={form.httpCandidateCount} min={1} max={5000} onChange={(value) => number("httpCandidateCount", value)} />
+        </SettingsSection>
         <SettingsSection title="超时与数据源" description="数据源失败会按固定短间隔重试，取消任务会立即中断等待。">
           <Field label="连接超时 (ms)" value={form.connectTimeoutMs} min={100} max={30000} onChange={(value) => number("connectTimeoutMs", value)} />
           <Field label="HTTPS 超时 (ms)" value={form.requestTimeoutMs} min={500} max={60000} onChange={(value) => number("requestTimeoutMs", value)} />
@@ -80,6 +91,8 @@ export function SettingsPage() {
           <RateField label="连接最低成功率" value={form.connectionMinSuccessRate} onChange={(value) => setForm((current) => ({ ...current, ["connectionMinSuccessRate"]: value }))} />
           <RateField label={`${httpLabel} 最低成功率`} value={form.httpMinSuccessRate} onChange={(value) => setForm((current) => ({ ...current, ["httpMinSuccessRate"]: value }))} />
         </SettingsSection>
+        </div>
+        <div className="settings-column">
         <SettingsSection title="评分权重" description="通过硬门槛的节点先归一化，再按以下权重计算综合分。">
           <div className="score-weight-summary field-wide"><span>当前总和</span><strong data-valid={scoreWeightTotal(form.scoreWeights)===100}>{scoreWeightTotal(form.scoreWeights)}%</strong><Button variant="tertiary" onPress={()=>setForm(current=>({...current,scoreWeights:{...DEFAULT_SCORE_WEIGHTS}}))}><RotateCcw size={14}/>恢复默认</Button></div>
           <WeightField label="带宽" value={form.scoreWeights.bandwidth} onChange={bandwidth=>setForm(current=>({...current,scoreWeights:{...current.scoreWeights,bandwidth}}))}/>
@@ -89,14 +102,13 @@ export function SettingsPage() {
           <WeightField label="抖动" value={form.scoreWeights.jitter} onChange={jitter=>setForm(current=>({...current,scoreWeights:{...current.scoreWeights,jitter}}))}/>
         </SettingsSection>
       </div>
-    </div>
+      </div>
+    </details>
     <UpdateSection/>
     <details className="panel h3-advanced"><summary>H3 高级设置</summary><SettingsSection title="HTTP/3 入口验证" description="默认验证 Cloudflare 公共域名，无需 Worker 或凭据。自定义域名只验证该域名入口，不验证完整 XHTTP、ECH 或 ProxyIP。">
       <div className="field field-wide"><label>验证域名（可选）</label><Input aria-label="验证域名" value={form.verificationHost} placeholder="h3.speed.cloudflare.com" onChange={event=>setForm(current=>({...current,verificationHost:event.target.value}))}/><small>留空使用 h3.speed.cloudflare.com；更改后需重新探测连接。</small></div>
       <Field label="QUIC 握手超时 (ms)" value={form.h3ConnectTimeoutMs} min={100} max={30000} onChange={value=>number("h3ConnectTimeoutMs",value)}/>
       <Field label="HTTP/3 超时 (ms)" value={form.h3RequestTimeoutMs} min={500} max={60000} onChange={value=>number("h3RequestTimeoutMs",value)}/>
-      <BandwidthTestPresetField isH3 value={form.h3BandwidthTestUrl} onChange={h3BandwidthTestUrl=>setForm(current=>({...current,h3BandwidthTestUrl}))}/>
-      <div className="field field-wide"><label>H3 下载测速 URL</label><Input aria-label="H3 下载测速 URL" value={form.h3BandwidthTestUrl} onChange={event=>setForm(current=>({...current,h3BandwidthTestUrl:event.target.value}))}/><small>固定候选 IPv4，强制 HTTP/3，不跟随重定向；多 IP 域名累计下载。</small></div>
     </SettingsSection></details>
     <div className="license-entry"><LicenseDialog/></div>
   </div>;
@@ -117,7 +129,7 @@ export function validateSettings(form: Settings) {
     if (form.lineBandwidthMbps > 0 && form.lineBandwidthMbps < form.minBandwidthMbps) return "线路带宽上限不能低于最低节点带宽";
     const bandwidthURLMessage = validateBandwidthTestURL(form.bandwidthTestUrl)||validateBandwidthTestURL(form.h3BandwidthTestUrl);
     if (bandwidthURLMessage) return bandwidthURLMessage;
-    if (form.finalResultCount > form.bandwidthCandidates) return "最终结果数不能大于带宽目标通过数";
+    if (form.finalResultCount > form.bandwidthCandidates) return "最终结果数不能大于新节点达标目标";
     if (form.allowedPorts.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) return "端口必须在 1 到 65535 之间";
     if ([...form.allowedCountries, ...form.blockedCountries].some((country) => !/^[A-Z]{2}$/.test(country))) return "国家代码必须是两个大写字母";
     const blocked = new Set(form.blockedCountries);
@@ -164,6 +176,36 @@ function BandwidthField({label,value,description,onChange}:{label:string;value:n
   return <div className="field"><label>{label} (Mbps)</label><Input type="number" aria-label={label}
     value={value===0?"":String(value)} placeholder="0" min={0} step="any"
     onChange={event=>onChange(Number(event.target.value))}/><small>{description}</small></div>;
+}
+
+function DownloadAddressField({form,isH3,onChange}:{form:Settings;isH3:boolean;onChange:(value:string)=>void}){
+  const value=isH3?form.h3BandwidthTestUrl:form.bandwidthTestUrl;
+  const title=isH3?"H3 下载测速 URL":"下载测速 URL";
+  const [checking,setChecking]=useState(false);
+  const [result,setResult]=useState<{value:string;check?:DownloadCheck;error?:string}>();
+  const check=async()=>{
+    setChecking(true);
+    setResult(undefined);
+    try{
+      const report=await bridge.testDownloadAddress({...form,requireH3:isH3});
+      setResult({value,check:report});
+    }catch(reason){
+      setResult({value,error:String(reason)});
+    }finally{
+      setChecking(false);
+    }
+  };
+  return <>
+    <BandwidthTestPresetField isH3={isH3} value={value} onChange={onChange}/>
+    <div className="field field-wide">
+      <label>{title}</label>
+      <div className="download-url-field">
+        <Input aria-label={title} value={value} placeholder="https://example.com/file.bin" onChange={event=>onChange(event.target.value)}/>
+        <Button variant="secondary" isDisabled={checking} aria-label={isH3?"测试 H3 下载地址":"测试下载地址"} onPress={()=>void check()}><Radio size={15}/>{checking?"检查中…":"测试地址"}</Button>
+      </div>
+      {result?.value===value&&<small role={result.error?"alert":"status"}>{result.error??(result.check&&downloadCheckText(result.check))}</small>}
+    </div>
+  </>;
 }
 
 function BandwidthTestPresetField({ value, onChange, isH3 }: { value: string; onChange: (value: string) => void; isH3: boolean }) {

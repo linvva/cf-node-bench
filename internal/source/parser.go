@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
 
 	"github.com/linvva/cf-node-bench/internal/config"
 	"github.com/linvva/cf-node-bench/internal/model"
+	"github.com/linvva/cf-node-bench/internal/region"
 	"golang.org/x/net/idna"
 )
 
@@ -76,8 +78,17 @@ func walkJSON(value any, sourceID string, result *ParseResult, allowDomains bool
 	}
 }
 
+var resultMetric = regexp.MustCompile(`^(?:(?:TCP|QUIC|HTTP3?)?[0-9]+(?:\.[0-9]+)?ms|[0-9]+(?:\.[0-9]+)?M(?:bps)?)$`)
+
 func parseToken(token, sourceID string, result *ParseResult, allowDomains bool) {
-	address, country, _ := strings.Cut(strings.TrimSpace(token), "#")
+	address, labels, _ := strings.Cut(strings.TrimSpace(token), "#")
+	address, _, _ = strings.Cut(address, "|")
+	country, _, _ := strings.Cut(labels, "|")
+	if code, ok := region.CodeFromFlag(country); ok {
+		country = code
+	} else if country == "H3" || resultMetric.MatchString(country) {
+		country = ""
+	}
 	if ip := net.ParseIP(address); ip != nil && ip.To4() != nil {
 		addCandidate(address, 443, country, sourceID, result, allowDomains)
 		return

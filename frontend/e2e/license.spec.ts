@@ -5,8 +5,7 @@ import { installNative } from "./native";
 const documents=[
   {title:"项目许可证",path:"../../LICENSE"},
   {title:"第三方声明",path:"../public/THIRD_PARTY_NOTICES.md"},
-  {title:"Apache 2.0",path:"../public/licenses/Apache-2.0.txt"},
-  {title:"Twemoji 许可",path:"../public/licenses/twemoji-colr-LICENSE.md"},
+  {title:"Unicode 许可",path:"../public/licenses/Unicode-3.0.txt"},
 ].map(document=>({...document,text:readFileSync(new URL(document.path,import.meta.url),"utf8")}));
 
 for(const mode of ["preview","desktop"] as const)test(`license documents are available offline in ${mode}`,async({page,context},testInfo)=>{

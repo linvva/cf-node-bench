@@ -6,17 +6,20 @@ for(const mode of ["tcp_https","h3"] as const)test(`HTTP batches continue until 
   await expect(page.getByRole("heading",{name:"测速工作台"})).toBeVisible();
   if(mode==="h3")await page.getByRole("tab",{name:"H3",exact:true}).click();
   await page.getByRole("button",{name:"设置",exact:true}).click();
+  await page.locator(".settings-advanced > summary").click();
   await page.getByLabel("HTTP 候选批量",{exact:true}).fill("2");
-  await page.getByLabel("带宽目标通过数",{exact:true}).fill("6");
+  await page.getByLabel("新节点达标目标",{exact:true}).fill("6");
   await page.getByLabel("最终结果数",{exact:true}).fill("3");
   await page.getByRole("button",{name:"保存设置",exact:true}).click();
   await expect(page.getByText("设置已保存",{exact:true})).toBeVisible();
   await page.getByRole("button",{name:"测速工作台",exact:true}).click();
   await page.getByRole("button",{name:"开始测速",exact:true}).click();
+  await page.locator(".run-details > summary").click();
   const queue=page.getByLabel("带宽新节点队列");
+  await expect(page.locator(".status-pill")).toHaveCount(3);
+  await page.locator(".run-details > summary").click();
   await expect(queue).toContainText("新节点通过：6 / 6",{timeout:10000});
   expect(Number((await queue.locator("span").first().innerText()).split("：")[1])).toBeGreaterThan(2);
-  await expect(page.locator(".status-pill")).toHaveCount(3);
   await expect(page.getByText("本轮候选已测完，未达到目标",{exact:true})).toHaveCount(0);
   await page.screenshot({path:testInfo.outputPath("http-batch-refill.png")});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBe(0);
@@ -72,11 +75,12 @@ for(const mode of ["tcp_https","h3"] as const)test(`HTTP selection and download 
       {name:"bandwidth",input:33,passed:18,failed:12,attemptsCompleted:30,attemptsTotal:33,durationMs:10000,state:"running",queue:{pool:200,target:30,planned:50,active:3,pending:17,passed:18}},
     ],failures:{}});
   },mode);
+  await page.locator(".run-details > summary").click();
   const queue=page.getByLabel("带宽新节点队列");
   await expect(queue).toContainText("新节点候选池：200累计安排：50待测：17在测：3新节点通过：18 / 30");
   await expect(page.getByRole("progressbar",{name:"带宽进度"})).toHaveAttribute("aria-valuenow","60");
   await expect(page.getByLabel("候选路径")).toContainText(`200${mode==="h3"?"新节点入选":"HTTPS 入选"}`);
-  await expect(page.getByText("动态补测",{exact:true})).toBeVisible();
+  await expect(page.getByText("本阶段预计剩余",{exact:true})).toHaveCount(0);
   await page.screenshot({path:testInfo.outputPath("download-queue.png")});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBe(0);
 });
@@ -94,11 +98,16 @@ test("early failed probes show skipped work without inflating executed attempts"
   await expect(page.getByLabel("当前测速进度")).toContainText("2 / 9 次探测 · 提前跳过 4 次");
   await expect(page.getByText("1 次/秒",{exact:true})).toBeVisible();
   await expect(page.getByText("1 秒",{exact:true})).toBeVisible();
+  await page.locator(".run-details > summary").click();
   const stage=page.locator(".stage").filter({hasText:"QUIC"});
   await expect(stage).toContainText("提前跳过 4 次");
   await page.screenshot({path:testInfo.outputPath("early-stop-progress.png")});
   await update(3,"completed");
-  await expect(page.getByRole("progressbar",{name:"QUIC进度"})).toHaveAttribute("aria-valuenow","100");
+  await page.evaluate(()=>{
+    const now=new Date().toISOString();
+    window.__emitNative("run:complete",{runId:"early-stop",mode:"h3",state:"completed",startedAt:now,finishedAt:now,results:[],stages:[{name:"quic",input:3,passed:0,failed:3,attemptsCompleted:3,attemptsSkipped:6,attemptsTotal:9,durationMs:2000,state:"completed"}]});
+  });
+  await expect(page.getByRole("progressbar",{name:"QUIC进度"})).toHaveCount(0);
   await expect(stage).toContainText("0 通过 · 3 失败");
   await expect(stage).toContainText("提前跳过 6 次");
   expect(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBe(0);
@@ -111,17 +120,25 @@ test("workspace remains stable through a complete run",async({page},testInfo)=>{
   await page.goto("/");
   await expect(page.getByRole("heading",{name:"测速工作台"})).toBeVisible();
   const stage=page.getByLabel("测速阶段");
-  const before=await stage.boundingBox();
+  await expect(stage).toHaveCount(0);
   await page.getByRole("button",{name:/开始测速/}).click();
   await expect(page.getByRole("button",{name:/取消测速/})).toBeVisible();
   await expect(page.getByLabel("当前测速进度")).toContainText("进行中");
   await expect(page.getByRole("progressbar")).toBeVisible();
+  await page.locator(".run-details > summary").click();
   await expect(page.getByLabel("候选路径")).toBeVisible();
   await expect(page.locator(".stage").filter({hasText:"保留复检"})).toBeVisible();
-  const during=await stage.boundingBox();
-  expect(during?.height).toBe(before?.height);
+  await expect(stage.locator(".stage")).toHaveCount(7);
   await expect(page.getByText("104.18.1.20:8443")).toBeVisible({timeout:8000});
-  const retention=page.getByRole("switch",{name:/全量测速时优先复检上轮结果/});
+  const search=page.getByRole("textbox",{name:"筛选节点"});
+  for(const query of ["JP","日本"]){
+    await search.fill(query);
+    const rows=page.getByLabel("Cloudflare 节点测速结果").getByRole("row");
+    await expect(rows.nth(1)).toContainText("🇯🇵日本");
+    await expect(page.getByText("104.18.1.20:8443",{exact:true})).toHaveCount(0);
+  }
+  await search.fill("");
+  const retention=page.getByRole("switch",{name:"上轮节点复测"});
   const retentionControl=page.locator(".retention-switch [data-slot='switch-content']");
   await expect(retention).toBeChecked();
   await retentionControl.click();
@@ -130,18 +147,19 @@ test("workspace remains stable through a complete run",async({page},testInfo)=>{
   await expect(retention).toBeChecked();
   await page.getByText("104.18.1.20:8443").click();
   await expect(page.locator('[data-slot="drawer-content"]')).toBeVisible();
+  await expect(page.locator('[data-slot="drawer-content"]')).toContainText("🇨🇳中国");
   await page.waitForTimeout(350);
   expect(await page.locator(".drawer__dialog").evaluate(element=>element.getBoundingClientRect().width)).toBeGreaterThan(350);
   await page.screenshot({path:testInfo.outputPath("drawer.png"),fullPage:true});
   await page.getByRole("button",{name:"关闭"}).click();
   await expect(page.locator('[data-slot="drawer-content"]')).not.toBeVisible();
   await page.getByLabel("复制选项").click();
-  await expect(page.getByRole("checkbox",{name:"国家代码"})).toBeChecked();
+  await expect(page.getByRole("checkbox",{name:"地区标签"})).toBeChecked();
   await expect(page.getByRole("checkbox",{name:"HTTP 平均延迟"})).toBeChecked();
   await expect(page.getByRole("checkbox",{name:"下载带宽"})).toBeChecked();
   await page.locator('[data-slot="checkbox-content"]').filter({hasText:"TCP P95"}).click();
-  await page.getByRole("button",{name:"复制结果"}).click();
-  expect(await page.evaluate(()=>(window as typeof window&{__copiedText?:string}).__copiedText?.split("\n")[0])).toBe("104.18.1.20:8443#CN|TCP22ms|HTTP44ms|186Mbps");
+  await page.getByRole("button",{name:/^复制全部 \d+ 个$/}).click();
+  expect(await page.evaluate(()=>(window as typeof window&{__copiedText?:string}).__copiedText?.split("\n")[0])).toBe("104.18.1.20:8443#🇨🇳中国|TCP22ms|HTTP44ms|186Mbps");
   await page.screenshot({path:testInfo.outputPath("workspace.png"),fullPage:true});
   const overflow=await page.evaluate(()=>({x:document.documentElement.scrollWidth-document.documentElement.clientWidth,y:document.documentElement.scrollHeight-document.documentElement.clientHeight}));
   expect(overflow.x).toBe(0); expect(overflow.y).toBe(0);
@@ -154,6 +172,7 @@ test("progress stays responsive while previous results remain visible",async({pa
 
   await page.getByRole("button",{name:/开始测速/}).click();
   await expect(page.getByRole("button",{name:/取消测速/})).toBeVisible();
+  await page.locator(".run-details > summary").click();
   const tcpStage=page.locator(".stage").filter({hasText:"TCP"});
   await expect(tcpStage.locator(".stage-time")).toContainText("探测",{timeout:4000});
   await page.screenshot({path:testInfo.outputPath("progress.png"),fullPage:true});
@@ -165,6 +184,7 @@ test("progress stays responsive while previous results remain visible",async({pa
   await content.evaluate(element=>{element.scrollTop=0;});
   expect(await content.evaluate(element=>element.scrollTop)).toBe(0);
   await expect(page.getByRole("button",{name:/开始测速/})).toBeVisible({timeout:8000});
+  await page.locator(".run-details > summary").click();
   const retainedStage=page.locator(".stage").filter({hasText:"保留复检"});
   await expect(retainedStage).toContainText("14 通过 · 1 失败");
   await expect(page.getByLabel("候选路径")).toContainText("15复检输入");
@@ -215,16 +235,17 @@ test("settings and sources fit without overlap",async({page},testInfo)=>{
   await expect(page.getByLabel("允许国家已选")).toContainText("CN");
   const countryFlag=page.getByLabel("允许国家已选").locator(".country-flag").first();
   await expect(countryFlag).toBeVisible();
-  expect(await countryFlag.evaluate(element=>getComputedStyle(element).fontFamily)).toContain("Twemoji Mozilla");
-  expect(await page.evaluate(()=>document.fonts.check('16px "Twemoji Mozilla"',"🇨🇳"))).toBe(true);
+  await expect(countryFlag).toHaveText("🇨🇳");
   await expect(page.getByRole("searchbox",{name:"搜索允许国家"})).not.toBeVisible();
   await page.getByLabel("排除国家选择器").click();
   await page.getByRole("searchbox",{name:"搜索排除国家"}).fill("CN");
   await page.getByRole("option",{name:/中国.*CN/}).click();
   await expect(page.getByRole("searchbox",{name:"搜索排除国家"})).not.toBeVisible();
   await page.screenshot({path:testInfo.outputPath("settings.png"),fullPage:true});
-  const settingsClipped=await page.locator("button, input").evaluateAll(nodes=>nodes.filter(node=>node.scrollWidth>node.clientWidth+1||node.scrollHeight>node.clientHeight+1).length);
-  expect(settingsClipped).toBe(0);
+  const settingsClipped=await page.locator("button, input").evaluateAll(nodes=>nodes
+    .filter(node=>node.scrollWidth>node.clientWidth+1||node.scrollHeight>node.clientHeight+1)
+    .map(node=>({label:node.getAttribute("aria-label")??node.textContent,width:node.clientWidth,scrollWidth:node.scrollWidth,height:node.clientHeight,scrollHeight:node.scrollHeight})));
+  expect(settingsClipped).toEqual([]);
   await page.locator(".main-content").evaluate(element=>{element.scrollTop=element.scrollHeight;});
   await expect(saveSettings).toBeVisible();
   expect(Math.abs((await saveSettings.boundingBox())!.y-saveTop)).toBeLessThanOrEqual(1);
@@ -262,7 +283,10 @@ test("publish settings switch modes without overlap",async({page},testInfo)=>{
   await page.getByRole("button",{name:"发布"}).click();
   await expect(page.getByRole("heading",{name:"结果发布"})).toBeVisible();
   await expect(page.getByText("自动发布尚未生效")).toBeVisible();
-  await expect(page.getByText(/启用渠道并配置目标、保存后生效/)).toBeVisible();
+  await expect(page.getByRole("heading",{name:"最近可发布结果"})).toBeVisible();
+  for(const target of ["Cloudflare DNS","GitHub 仓库","GitHub Gist","Telegram Bot"]){
+    await page.locator(".target-settings > summary").filter({hasText:"配置 "+target}).click();
+  }
   const savePublish=page.getByRole("button",{name:/保存设置/});
   const savePublishTop=(await savePublish.boundingBox())!.y;
   await expect(page.getByRole("switch",{name:"启用 GitHub 仓库"})).toBeVisible();
@@ -288,16 +312,16 @@ test("publish settings switch modes without overlap",async({page},testInfo)=>{
   await page.getByRole("tab",{name:"TXT 记录"}).click();
   await expect(page.getByText("启用 Cloudflare 代理")).not.toBeVisible();
   const outputPreview=page.getByLabel("发布内容预览");
-  await expect(outputPreview).toHaveText("104.18.1.20:443#US|44ms|186M");
+  await expect(outputPreview).toHaveText("104.18.1.20:443#🇺🇸美国|44ms|186M");
   const presets=page.getByRole("group",{name:"发布格式预设"});
   await presets.getByRole("button",{name:"极简",exact:true}).click();
-  await expect(outputPreview).toHaveText("104.18.1.20:443#US");
+  await expect(outputPreview).toHaveText("104.18.1.20:443#🇺🇸美国");
   await presets.getByRole("button",{name:"详细",exact:true}).click();
-  await expect(outputPreview).toHaveText("104.18.1.20:443#US|TCP22ms|HTTP44ms|186Mbps");
+  await expect(outputPreview).toHaveText("104.18.1.20:443#🇺🇸美国|TCP22ms|HTTP44ms|186Mbps");
   await presets.getByRole("button",{name:"简洁（推荐）"}).click();
   const publishModes=page.getByRole("tablist",{name:"发布目标模式"});
   await publishModes.getByRole("tab",{name:"H3",exact:true}).click();
-  await expect(outputPreview).toHaveText("104.18.1.20:443#US|H3|44ms|186M");
+  await expect(outputPreview).toHaveText("104.18.1.20:443#🇺🇸美国|H3|44ms|186M");
   await publishModes.getByRole("tab",{name:"普通（TCP/HTTPS）"}).click();
   await page.locator(".main-content").evaluate(element=>{element.scrollTop=0;});
   await page.screenshot({path:testInfo.outputPath("publish-top.png"),fullPage:true});
@@ -357,12 +381,14 @@ test("H3 requirement shares configuration and history while keeping actual proto
   await expect(page.getByText("104.18.1.20:8443",{exact:true})).toBeVisible({timeout:10000});
   const tcpRunId=await page.getByRole("combobox",{name:"查看历史运行"}).inputValue();
   await page.getByRole("button",{name:"发布",exact:true}).click();
+  await page.locator(".target-settings > summary").filter({hasText:"配置 Cloudflare DNS"}).click();
   await page.getByRole("tab",{name:"TXT 记录"}).click();
   await page.getByRole("button",{name:/保存设置/}).click();
   await page.getByRole("button",{name:/测速工作台/}).click();
   await toggle.click();await expect(toggle).toHaveAttribute("aria-selected","true");
-  await expect(page.getByRole("columnheader",{name:"TCP 成功"})).toBeVisible();
+  await expect(page.getByRole("columnheader",{name:"HTTP 延迟"})).toBeVisible();
   await page.getByRole("button",{name:"设置",exact:true}).click();
+  await page.locator(".settings-advanced > summary").click();
   await expect(page.getByLabel("连接并发",{exact:true})).toHaveValue("64");
   await expect(page.getByLabel("下载测速 URL",{exact:true})).toHaveValue("https://speed.cloudflare.com/__down?bytes=99999999");
   await page.getByText("H3 高级设置",{exact:true}).click();
@@ -374,13 +400,14 @@ test("H3 requirement shares configuration and history while keeping actual proto
   await page.screenshot({path:testInfo.outputPath("unified-settings.png")});
   await page.getByRole("button",{name:/测速工作台/}).click();await expect(toggle).toHaveAttribute("aria-selected","true");
   await page.getByRole("button",{name:/开始测速/}).click();await expect(toggle).toBeDisabled();
+  await page.locator(".run-details > summary").click();
   await expect(page.getByLabel("H3 检测数量")).toContainText("累计下载：0.0 MiB");
   await expect(page.getByText("edge.example.com:443",{exact:true})).toBeVisible({timeout:10000});await expect(toggle).toBeEnabled();
-  await expect(page.getByRole("columnheader",{name:"QUIC 成功"})).toBeVisible();
+  await expect(page.getByRole("columnheader",{name:"HTTP/3 延迟"})).toBeVisible();
   await expect(page.getByText(/H3 入口测量结果 · IPv4 · h3.speed.cloudflare.com/)).toBeVisible();
-  await page.getByRole("button",{name:"复制结果",exact:true}).click();
+  await page.getByRole("button",{name:/^复制全部 \d+ 个$/}).click();
   const copied=await page.evaluate(()=>(window as typeof window&{__copiedText?:string}).__copiedText);
-  expect(copied).toContain("edge.example.com:443#JP|H3");expect(copied).not.toContain("TCP");
+  expect(copied).toContain("edge.example.com:443#🇯🇵日本|H3");expect(copied).not.toContain("TCP");
   await page.getByText("edge.example.com:443",{exact:true}).click();
   await expect(page.getByLabel("逐 IP 检测明细")).toContainText("192.0.2.10");await expect(page.getByLabel("逐 IP 检测明细")).toContainText("192.0.2.11");
   await page.waitForTimeout(350);await page.screenshot({path:testInfo.outputPath("h3-domain-details.png")});await page.getByRole("button",{name:"关闭",exact:true}).click();
@@ -390,11 +417,11 @@ test("H3 requirement shares configuration and history while keeping actual proto
     await expect(page.getByRole("button",{name:/开始测速/})).toBeVisible({timeout:10000});
   }
   await page.getByRole("tab",{name:"普通（TCP/HTTPS）",exact:true}).click();await expect(toggle).toHaveAttribute("aria-selected","false");
-  await expect(page.getByRole("columnheader",{name:"QUIC 成功"})).toBeVisible();
+  await expect(page.getByRole("columnheader",{name:"HTTP/3 延迟"})).toBeVisible();
   await page.getByRole("combobox",{name:"查看历史运行"}).selectOption(tcpRunId);
-  await expect(page.getByRole("columnheader",{name:"TCP 成功"})).toBeVisible();
+  await expect(page.getByRole("columnheader",{name:"HTTP 延迟"})).toBeVisible();
   const history=page.getByRole("combobox",{name:"查看历史运行"});await expect(history).toContainText("H3");await expect(history).toContainText("TCP/HTTPS");
-  await page.getByRole("button",{name:"发布",exact:true}).click();await expect(page.getByRole("tab",{name:"TXT 记录"})).toHaveAttribute("aria-selected","true");
+  await page.getByRole("button",{name:"发布",exact:true}).click();await page.locator(".target-settings > summary").filter({hasText:"配置 Cloudflare DNS"}).click();await expect(page.getByRole("tab",{name:"TXT 记录"})).toHaveAttribute("aria-selected","true");
 });
 
 test("publication mode tabs keep targets separate and route historical results",async({page},testInfo)=>{
@@ -404,6 +431,12 @@ test("publication mode tabs keep targets separate and route historical results",
   const save=page.getByRole("button",{name:"保存设置",exact:true});
   const publishMode=page.getByRole("tablist",{name:"发布目标模式"});
   const selectTargetMode=async(name:string)=>publishMode.getByRole("tab",{name,exact:true}).click();
+  const openTargets=async()=>{
+    for(const target of ["Cloudflare DNS","GitHub 仓库","GitHub Gist"]){
+      await page.locator(".target-settings > summary").filter({hasText:"配置 "+target}).click();
+    }
+  };
+  await openTargets();
   await page.getByLabel("记录名",{exact:true}).fill("cf.example.com");
   await page.getByLabel("文件路径",{exact:true}).fill("ip.txt");
   await page.getByLabel("Gist ID",{exact:true}).fill("abc123");
@@ -454,7 +487,7 @@ test("publication mode tabs keep targets separate and route historical results",
   const retry=page.getByRole("button",{name:"重试 gist",exact:true});
   await retry.click();await expect(raw).toHaveAttribute("href","https://gist.githubusercontent.com/example/def456/raw/h3.txt");
   await history.selectOption(tcpRunId);await retry.click();await expect(raw).toHaveAttribute("href","https://gist.githubusercontent.com/example/abc123/raw/ip.txt");
-  await page.getByRole("button",{name:"发布",exact:true}).click();await selectTargetMode("H3");
+  await page.getByRole("button",{name:"发布",exact:true}).click();await openTargets();await selectTargetMode("H3");
   await expect(page.getByLabel("记录名",{exact:true})).toHaveValue("h3.example.com");await expect(page.getByLabel("文件路径",{exact:true})).toHaveValue("results/h3.txt");
   await page.getByLabel("Gist ID",{exact:true}).fill("");await page.getByLabel("文件名",{exact:true}).fill("");
   await expect(gistCard).toContainText("未配置，发布时跳过");await save.click();
@@ -465,6 +498,7 @@ test("publication mode tabs keep targets separate and route historical results",
 
 test("an unconfigured H3 destination never publishes to the ordinary target",async({page})=>{
   await page.goto("/");await page.getByRole("button",{name:"发布",exact:true}).click();
+  await page.locator(".target-settings > summary").filter({hasText:"配置 GitHub Gist"}).click();
   const gistCard=page.locator(".target-section").filter({has:page.getByRole("heading",{name:"GitHub Gist",exact:true})});
   await page.getByLabel("Gist ID",{exact:true}).fill("abc123");await page.getByLabel("文件名",{exact:true}).fill("ip.txt");await page.getByLabel("Gist Personal Access Token",{exact:true}).fill("mock-shared-token");
   await gistCard.locator(".publish-heading [data-slot='switch-content']").click();await page.getByRole("button",{name:"保存设置",exact:true}).click();
@@ -472,4 +506,50 @@ test("an unconfigured H3 destination never publishes to the ordinary target",asy
   await page.getByRole("tablist",{name:"发布目标模式"}).getByRole("tab",{name:"H3",exact:true}).click();await gistCard.getByRole("button",{name:"测试连接",exact:true}).click();await expect(page.locator(".page-action-status")).toContainText("H3 GitHub Gist 发布目标未配置");
   await page.getByRole("button",{name:"测速工作台",exact:true}).click();await page.getByRole("tab",{name:"H3",exact:true}).click();await page.getByRole("button",{name:/开始测速/}).click();
   await expect(page.getByLabel("发布状态")).toContainText("H3 未配置发布目标",{timeout:10000});await expect(page.getByRole("link",{name:"打开 Gist Raw 文件"})).toHaveCount(0);
+});
+
+test("native preflight, quick selection and saved bandwidth continuation are reachable",async({page})=>{
+  await installNative(page);
+  await page.addInitScript(()=>{
+    let runId="quick-paused";
+    const startedAt=new Date().toISOString();
+    const resume={baseRunId:runId,options:[],continueBandwidth:{stage:"bandwidth",available:true,input:2,warnings:[]}};
+    let saved=false;
+    let summary:Record<string,unknown>|undefined;
+    window.__nativeApi={
+      ...window.__nativeApi,
+      Bootstrap:()=>({version:"test",history:summary?[summary]:[],currentResultRunId:summary?.runId,resume:saved?resume:{options:[]}}),
+      TestDownloadAddress:({bandwidthTestUrl})=>({host:new URL(bandwidthTestUrl).hostname,sampled:3,passed:0,failures:{tls_timeout:2,http_status:1}}),
+      StartRun:request=>{
+        if(!saved&&(request.startStage!=="source"||!request.quick))throw new Error("Expected quick selection");
+        if(saved&&(!request.continueBandwidth||request.baseRunId!==resume.baseRunId))throw new Error("Expected bandwidth continuation");
+        if(saved)runId="quick-resumed";
+        setTimeout(()=>window.__emitNative("run:progress",{runId,state:"running",quick:true,startedAt,stages:[{name:"https",input:4,passed:3,failed:1,durationMs:400,state:"completed",failures:{tls_timeout:1}},{name:"bandwidth",input:3,passed:1,failed:1,durationMs:1300,state:"running",queue:{pool:3,target:2,planned:3,active:1,pending:0,passed:1}}],failures:{tls_timeout:1}}),30);
+        return runId;
+      },
+      SaveBandwidthAndStop:()=>{
+        saved=true;
+        summary={runId,state:"cancelled",quick:true,bandwidthSaved:true,startedAt,finishedAt:new Date().toISOString(),results:[]};
+        setTimeout(()=>window.__emitNative("run:complete",summary),30);
+        return true;
+      },
+    };
+  });
+  await page.goto("/");
+  await page.getByRole("button",{name:"设置",exact:true}).click();
+  await page.getByLabel("下载测速 URL",{exact:true}).fill("https://download.example.test/sample");
+  await page.getByRole("button",{name:"测试下载地址",exact:true}).click();
+  await expect(page.getByText(/download.example.test · 0 \/ 3 个候选可下载/)).toContainText("TLS 握手超时 2、HTTP 状态异常 1");
+
+  await page.getByRole("button",{name:"测速工作台",exact:true}).click();
+  await page.getByLabel("筛选策略").selectOption("quick");
+  await page.getByRole("button",{name:"开始测速",exact:true}).click();
+  await expect(page.getByLabel("当前测速进度")).toContainText("快速筛选");
+  await page.locator(".run-details > summary").click();
+  await expect(page.getByText("TLS 握手超时 1",{exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"保存进度并停止",exact:true}).click();
+  await expect(page.getByRole("combobox",{name:"查看历史运行"})).toContainText("已保存进度");
+  await expect(page.getByLabel("发布状态")).toHaveCount(0);
+  await page.getByRole("button",{name:"继续带宽测速",exact:true}).click();
+  await expect(page.getByLabel("当前测速进度")).toContainText("新节点通过 1 / 2");
 });

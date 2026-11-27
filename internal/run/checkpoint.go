@@ -158,6 +158,8 @@ func sameEnabledSources(left, right []source.HTTPSource) bool {
 }
 
 type Checkpoint struct {
+	Quick                 bool                       `json:"quick,omitempty"`
+	Download              *DownloadCheckpoint        `json:"download,omitempty"`
 	HTTPSelectionComplete bool                       `json:"httpSelectionComplete,omitempty"`
 	LocalFiles            bool                       `json:"localFiles,omitempty"`
 	QUICResults           []model.ProbeResult        `json:"quicResults,omitempty"`
@@ -189,23 +191,28 @@ type ResumeOption struct {
 }
 
 type ResumeInfo struct {
-	BaseRunID string         `json:"baseRunId,omitempty"`
-	UpdatedAt time.Time      `json:"updatedAt,omitempty"`
-	Options   []ResumeOption `json:"options"`
-	Error     string         `json:"error,omitempty"`
+	ContinueBandwidth *ResumeOption  `json:"continueBandwidth,omitempty"`
+	BaseRunID         string         `json:"baseRunId,omitempty"`
+	UpdatedAt         time.Time      `json:"updatedAt,omitempty"`
+	Options           []ResumeOption `json:"options"`
+	Error             string         `json:"error,omitempty"`
 }
 
 type StartRequest struct {
+	Quick                bool   `json:"quick,omitempty"`
+	ContinueBandwidth    bool   `json:"continueBandwidth,omitempty"`
 	StartStage           string `json:"startStage"`
 	BaseRunID            string `json:"baseRunId,omitempty"`
 	AllowStaleCheckpoint bool   `json:"allowStaleCheckpoint"`
 }
 
 type RunPlan struct {
-	StartStage string
-	Base       *Checkpoint
-	Network    NetworkSnapshot
-	Save       func(Checkpoint) error
+	Quick             bool
+	ContinueBandwidth bool
+	StartStage        string
+	Base              *Checkpoint
+	Network           NetworkSnapshot
+	Save              func(Checkpoint) error
 }
 
 func ValidStartStage(stage string) bool {
@@ -258,6 +265,14 @@ func runStartStage(stage string, settings config.Settings, base *Checkpoint) str
 func incompleteHTTPRestartStage(c Checkpoint, settings config.Settings, start string) string {
 	if start != StageBandwidth && start != StageRanking {
 		return ""
+	}
+	if start == StageRanking && c.Quick {
+		if _, completed := c.Stage(StageBandwidth); completed &&
+			settings.ConnectionMinSuccessRate == c.Settings.ConnectionMinSuccessRate &&
+			settings.HTTPMinSuccessRate == c.Settings.HTTPMinSuccessRate &&
+			sameCandidateFilters(c.Settings, settings) {
+			return ""
+		}
 	}
 	stage := StageHTTPS
 	connections, httpResults := c.TCPResults, c.HTTPSResults

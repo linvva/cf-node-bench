@@ -4,7 +4,7 @@ info:
   productName: CF Node Bench
   productIdentifier: com.linvva.cf-node-bench
   description: Cloudflare 节点测速与优选工具
-  version: '0.11.0'
+  version: '0.12.0'
 dev_mode:
   root_path: .
   log_level: warn

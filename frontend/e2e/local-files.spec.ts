@@ -23,7 +23,7 @@ test("native file selection and window drops start one-time runs without changin
   await local.click();
   await expect(local).toBeDisabled();
   await expect(page.getByRole("tab",{name:"H3",exact:true})).toBeDisabled();
-  await expect(page.locator(".stage").first()).toContainText("本地文件");
+  await expect(page.getByLabel("当前测速进度")).toContainText("读取本地文件");
   await page.evaluate(()=>{(window as unknown as {__localFiles:{drop(paths:string[]):void}}).__localFiles.drop(["ignored.txt"]);});
   expect(await page.evaluate(()=>((window as unknown as {__localFiles:{calls:string[][]}}).__localFiles.calls))).toEqual([["C:\\节点\\nodes.csv","C:\\Downloads\\nodes.json"]]);
   await page.evaluate(()=>{(window as unknown as {__localFiles:{complete():void}}).__localFiles.complete();});

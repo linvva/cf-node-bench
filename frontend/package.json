@@ -1,7 +1,7 @@
 {
   "name": "cf-node-bench-frontend",
   "private": true,
-  "version": "0.11.0",
+  "version": "0.12.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -14,7 +14,6 @@
     "@heroui/react": "3.2.2",
     "@heroui/styles": "3.2.2",
     "@wailsio/runtime": "3.1.0",
-    "echarts": "6.1.0",
     "lucide-react": "1.25.0",
     "react": "19.2.7",
     "react-dom": "19.2.7"

@@ -1,4 +1,4 @@
-import type { Bootstrap, Mode, PinnedNode, ProbeResult, Candidate, FailureReason, HTTPSource, PublicationResult, PublicationUpdate, PublishCredentialTarget, PublishSaveRequest, PublishSettingsView, PublishTarget, ResumeInfo, RunProgress, RunStartRequest, RunStartStage, RunSummary, ScoreWeights, Settings, StageProgress, UpdateState } from "../types";
+import type { Bootstrap, DownloadCheck, Mode, PinnedNode, ProbeResult, Candidate, FailureReason, HTTPSource, PublicationResult, PublicationUpdate, PublishCredentialTarget, PublishSaveRequest, PublishSettingsView, PublishTarget, ResumeInfo, RunProgress, RunStartRequest, RunStartStage, RunSummary, ScoreWeights, Settings, StageProgress, UpdateState } from "../types";
 import { DEFAULT_BANDWIDTH_TEST_URL, DEFAULT_H3_BANDWIDTH_TEST_URL } from "./bandwidthTestUrls";
 import { DEFAULT_SCORE_WEIGHTS, H3_LEGACY_SCORE_WEIGHTS, LEGACY_SCORE_WEIGHTS, connectionWeight, httpWeight } from "./scoring";
 
@@ -26,6 +26,7 @@ let mockCancelled = false;
 let mockRunId = "";
 let mockStartedAt = "";
 let mockCompleted = 0;
+let mockQuick=false;
 let mockStartStage:RunStartStage="source";
 let mockParentRunId="";
 let mockCheckpointSettings:Settings|undefined;
@@ -92,7 +93,7 @@ export function normalizeBootstrap(value: Bootstrap): Bootstrap {
 }
 
 function normalizeResume(value?:ResumeInfo):ResumeInfo{
-  return {baseRunId:value?.baseRunId,updatedAt:value?.updatedAt,error:value?.error,options:Array.isArray(value?.options)?value.options.map(option=>({...option,warnings:Array.isArray(option.warnings)?option.warnings:[]})):[]};
+  return {...value,options:Array.isArray(value?.options)?value.options.map(option=>({...option,warnings:option.warnings??[]})):[],continueBandwidth:value?.continueBandwidth?{...value.continueBandwidth,warnings:value.continueBandwidth.warnings??[]}:undefined};
 }
 
 let mockData: Bootstrap = {
@@ -294,7 +295,7 @@ function mockResults(runId=mockRunId, startedAt=mockStartedAt, completed=mockPla
   const passed=mockProgressStages(plan,completed).find(stage=>stage.name==="bandwidth")?.passed??0;
   const measured=(currentMockSettings().requireH3?h3MockResults():results).slice(0,passed);
   const retained=mockCancelled&&!keepResults?[]:completed>5?mockResultsWithPinned(measured):measured;
-  const now=new Date(); return {runId,startedAt:startedAt||now.toISOString(),finishedAt:now.toISOString(),mode:currentMockSettings().requireH3?"h3":"tcp_https",workerHost:currentMockSettings().requireH3?effectiveVerificationHost(currentMockSettings()):undefined,logicalCandidates:currentMockSettings().requireH3?h3MockCandidates().length:undefined,physicalCandidates:currentMockSettings().requireH3?h3MockCandidates().reduce((sum,candidate)=>sum+(candidate.addressType==="domain"?2:1),0):undefined,downloadedBytes:currentMockSettings().requireH3&&completed>5&&mockStartStage!=="ranking"?(plan[5].passed+(plan[5].passed>0&&h3MockCandidates().some(candidate=>candidate.addressType==="domain")?1:0))*currentMockSettings().maxDownloadBytes:0,state:mockCancelled?"cancelled":"completed",partialResults:mockCancelled&&keepResults&&retained.length>0,results:retained,failures:mockFailures(plan,completed),publications:[],scoreWeights:structuredClone(currentMockSettings().scoreWeights),parentRunId:mockParentRunId||undefined,startStage:mockStartStage,reusedStages:plan.filter(stage=>stage.state==="reused").map(stage=>stage.name)};
+  const now=new Date(); return {runId,startedAt:startedAt||now.toISOString(),finishedAt:now.toISOString(),quick:mockQuick,stages:mockProgressStages(plan,completed).map(stage=>mockCancelled&&stage.state==="running"?{...stage,state:"cancelled"}:stage),mode:currentMockSettings().requireH3?"h3":"tcp_https",workerHost:currentMockSettings().requireH3?effectiveVerificationHost(currentMockSettings()):undefined,logicalCandidates:currentMockSettings().requireH3?h3MockCandidates().length:undefined,physicalCandidates:currentMockSettings().requireH3?h3MockCandidates().reduce((sum,candidate)=>sum+(candidate.addressType==="domain"?2:1),0):undefined,downloadedBytes:currentMockSettings().requireH3&&completed>5&&mockStartStage!=="ranking"?(plan[5].passed+(plan[5].passed>0&&h3MockCandidates().some(candidate=>candidate.addressType==="domain")?1:0))*currentMockSettings().maxDownloadBytes:0,state:mockCancelled?"cancelled":"completed",partialResults:mockCancelled&&keepResults&&retained.length>0,results:retained,failures:mockFailures(plan,completed),publications:[],scoreWeights:structuredClone(currentMockSettings().scoreWeights),parentRunId:mockParentRunId||undefined,startStage:mockStartStage,reusedStages:plan.filter(stage=>stage.state==="reused").map(stage=>stage.name)};
 }
 
 function mockResume(summary:RunSummary):ResumeInfo{
@@ -411,8 +412,15 @@ export const bridge = {
     if(isDesktop()) return (await native()).app.SelectLocalFiles();
     throw new Error("浏览器预览不支持读取本地文件，请使用桌面应用");
   },
-  async startLocalFiles(paths:string[]):Promise<string> {
-    if(isDesktop()) return (await native()).app.StartLocalFiles(paths);
+  async testDownloadAddress(settings:Settings):Promise<DownloadCheck> {
+    if(isDesktop()) return (await native()).app.TestDownloadAddress(settings);
+    throw new Error("浏览器预览无法通过候选节点发起请求，请使用桌面应用");
+  },
+  async startLocalFiles(paths:string[], quick=false):Promise<string> {
+    if(isDesktop()){
+      const {app}=await native();
+      return quick?app.StartLocalFilesWithStrategy(paths,true):app.StartLocalFiles(paths);
+    }
     throw new Error("浏览器预览不支持读取本地文件，请使用桌面应用");
   },
   onFileDrop(handler:(paths:string[])=>void){
@@ -422,14 +430,14 @@ export const bridge = {
     if(isDesktop()) return (await native()).app.StartRun(request);
     if(mockActive)throw new Error("已有测速任务运行中");
     if(request.startStage!=="source"){
-      const option=mockData.resume.options.find(item=>item.stage===request.startStage);
+      const option=request.continueBandwidth?mockData.resume.continueBandwidth:mockData.resume.options.find(item=>item.stage===request.startStage);
       if(!option?.available||request.baseRunId!==mockData.resume.baseRunId)throw new Error("阶段检查点已变化，请刷新后重试");
       if(option.warnings.length&&!request.allowStaleCheckpoint)throw new Error(`阶段检查点需要确认：${option.warnings.join("；")}`);
     }
-    mockActive=true;mockCancelled=false; mockParentRunId=request.startStage==="source"?"":mockData.resume.baseRunId??""; mockStartStage=request.startStage; mockRunId=`run-${Date.now()}`; mockStartedAt=new Date().toISOString(); mockRunSettings=structuredClone(mockData.settings); const plan=mockPlan(); const startIndex=startIndexFor(plan,mockStartStage); mockCompleted=startIndex; let step=startIndex;
-    mockTimer=window.setInterval(()=>{ const completed=Math.min(step,plan.length); mockCompleted=completed; const stages=mockProgressStages(plan,completed); progressHandlers.forEach(h=>h({runId:mockRunId,mode:currentMockSettings().requireH3?"h3":"tcp_https",logicalCandidates:currentMockSettings().requireH3?h3MockCandidates().length:undefined,physicalCandidates:currentMockSettings().requireH3?h3MockCandidates().reduce((sum,candidate)=>sum+(candidate.addressType==="domain"?2:1),0):undefined,downloadedBytes:currentMockSettings().requireH3&&completed>5&&mockStartStage!=="ranking"?(plan[5].passed+(plan[5].passed>0&&h3MockCandidates().some(candidate=>candidate.addressType==="domain")?1:0))*currentMockSettings().maxDownloadBytes:0,state:"running",availableResults:mockAvailableResults(plan,completed),startedAt:mockStartedAt,stages,failures:mockFailures(plan,completed)})); if(completed===plan.length){ window.clearInterval(mockTimer); const summary=mockResults(); mockData.history=[summary,...mockData.history].slice(0,40); mockData.currentResultRunId=summary.runId; mockCheckpointSettings=mockRunSettings; mockData.resume=mockResume(summary); mockActive=false;completeHandlers.forEach(h=>h(summary)); if(summary.state==="completed")void bridge.publishRun(summary.runId,"all"); } step++; },520); return mockRunId;
+    mockActive=true;mockCancelled=false; mockParentRunId=request.startStage==="source"?"":mockData.resume.baseRunId??""; mockStartStage=request.startStage; mockQuick=request.startStage==="source"?Boolean(request.quick):Boolean(mockData.history.find(item=>item.runId===request.baseRunId)?.quick); mockRunId=`run-${Date.now()}`; mockStartedAt=new Date().toISOString(); mockRunSettings=structuredClone(mockData.settings); const plan=mockPlan(); const startIndex=startIndexFor(plan,mockStartStage); mockCompleted=startIndex; let step=startIndex;
+    mockTimer=window.setInterval(()=>{ const completed=Math.min(step,plan.length); mockCompleted=completed; const stages=mockProgressStages(plan,completed); progressHandlers.forEach(h=>h({runId:mockRunId,quick:mockQuick,mode:currentMockSettings().requireH3?"h3":"tcp_https",logicalCandidates:currentMockSettings().requireH3?h3MockCandidates().length:undefined,physicalCandidates:currentMockSettings().requireH3?h3MockCandidates().reduce((sum,candidate)=>sum+(candidate.addressType==="domain"?2:1),0):undefined,downloadedBytes:currentMockSettings().requireH3&&completed>5&&mockStartStage!=="ranking"?(plan[5].passed+(plan[5].passed>0&&h3MockCandidates().some(candidate=>candidate.addressType==="domain")?1:0))*currentMockSettings().maxDownloadBytes:0,state:"running",availableResults:mockAvailableResults(plan,completed),startedAt:mockStartedAt,stages,failures:mockFailures(plan,completed)})); if(completed===plan.length){ window.clearInterval(mockTimer); const summary=mockResults(); mockData.history=[summary,...mockData.history].slice(0,40); mockData.currentResultRunId=summary.runId; mockCheckpointSettings=mockRunSettings; mockData.resume=mockResume(summary); mockActive=false;completeHandlers.forEach(h=>h(summary)); if(summary.state==="completed")void bridge.publishRun(summary.runId,"all"); } step++; },520); return mockRunId;
   },
-  async cancelRun(keepResults=false){ if(isDesktop()){const {app}=await native();return keepResults?app.CancelRunWithResults(true):app.CancelRun();} if(!mockActive)return false; mockCancelled=true; window.clearInterval(mockTimer); const summary=mockResults(mockRunId,mockStartedAt,mockCompleted,keepResults); mockData.history=[summary,...mockData.history].slice(0,40); mockData.currentResultRunId=summary.runId; mockCheckpointSettings=mockRunSettings; mockData.resume=mockResume(summary); mockActive=false;completeHandlers.forEach(h=>h(summary)); return true; },
+  async cancelRun(keepResults=false,saveBandwidth=false){ if(isDesktop()){const {app}=await native();return saveBandwidth?app.SaveBandwidthAndStop():keepResults?app.CancelRunWithResults(true):app.CancelRun();} if(!mockActive)return false; mockCancelled=true; window.clearInterval(mockTimer); const summary=mockResults(mockRunId,mockStartedAt,mockCompleted,keepResults); mockData.history=[summary,...mockData.history].slice(0,40); mockData.currentResultRunId=summary.runId; mockCheckpointSettings=mockRunSettings; mockData.resume=mockResume(summary); mockActive=false;completeHandlers.forEach(h=>h(summary)); return true; },
   onProgress(handler:Handler<RunProgress>){ progressHandlers.add(handler); const off=nativeEvent<RunProgress>("run:progress",value=>handler(normalizeProgress(value))); return ()=>{progressHandlers.delete(handler); off?.();}; },
   onComplete(handler:Handler<RunSummary>){ completeHandlers.add(handler); const off=nativeEvent<RunSummary>("run:complete",value=>handler(normalizeSummary(value))); return ()=>{completeHandlers.delete(handler); off?.();}; },
   onPublish(handler:Handler<PublicationUpdate>){ publishHandlers.add(handler); const off=nativeEvent<PublicationUpdate>("publish:progress",handler); return ()=>{publishHandlers.delete(handler); off?.();}; },

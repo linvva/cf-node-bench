@@ -133,6 +133,27 @@ func TestHTTPSClassifiesTimeout(t *testing.T) {
 	}
 }
 
+func TestBandwidthDistinguishesTLSHandshakeTimeout(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	release := make(chan struct{})
+	defer close(release)
+	go func() {
+		connection, err := listener.Accept()
+		if err == nil {
+			defer connection.Close()
+			<-release
+		}
+	}()
+	prober := BandwidthProber{ConnectTimeout: 40 * time.Millisecond, TotalTimeout: time.Second, MaxBytes: 64 * 1024}
+	if stats := prober.Probe(t.Context(), candidateFor(t, listener.Addr())); stats.Failure != model.FailureTLSHandshakeTimeout {
+		t.Fatalf("expected TLS handshake timeout, got %v", stats.Failure)
+	}
+}
+
 func TestBandwidthCancellationStopsRead(t *testing.T) {
 	server, roots := speedServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		flusher := w.(http.Flusher)
